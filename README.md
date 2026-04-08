@@ -17,7 +17,7 @@
 
 # claude-later
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
+[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility)
 [![Terminal: iTerm2](https://img.shields.io/badge/terminal-iTerm2-8A2BE2.svg)](https://iterm2.com)
@@ -104,7 +104,7 @@ For broader compatibility plans, see [ROADMAP.md](ROADMAP.md).
 ```sh
 git clone https://github.com/ajanderson1/claude-later.git ~/GitHub/claude-later
 ln -s ~/GitHub/claude-later/claude-later /usr/local/bin/claude-later
-claude-later --version  # should print: claude-later 0.1.0
+claude-later --version  # should print: claude-later 0.1.1
 ```
 
 First time you run `claude-later`, macOS will prompt for permission for your shell's parent process (iTerm2 or the process invoking it) to control iTerm2 via AppleScript. Grant it — this is System Settings → Privacy & Security → Automation.

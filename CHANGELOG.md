@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-08
+
+Bugfix release. One critical fix in the helper's load-bearing readiness signal.
+
 ### Fixed
 
 - **SIGPIPE-vs-pipefail bug in `osa_contents_has_prompt`**: under `set -uo
@@ -16,10 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   early, exit, and the upstream's next write would receive SIGPIPE (rc=141)
   which `pipefail` propagates as the pipeline rc. The bug only triggered on
   panes with large scrollbacks; small panes' single-syscall writes never
-  tripped it. Fixed by capturing contents into a variable and using bash
-  case-glob instead of pipe-and-grep. Same fix applied to `state_check_stale`
-  and `pf_8_power_sleep` for consistency, even though those weren't likely
-  to encounter the trigger condition.
+  tripped it — which is why v0.1.0's live test succeeded. Fixed by capturing
+  contents into a variable and using bash case-glob instead of pipe-and-grep.
+  Same fix applied to `state_check_stale` and `pf_8_power_sleep` for
+  consistency, even though those weren't likely to encounter the trigger
+  condition.
 
 ### Added
 
@@ -37,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `osa_contents_has_spinner` / `osa_contents_is_idle` consistency, and
   changed the hash-stability check from a flaky WARN to a clean SKIP when
   run against a busy Claude pane.
+
+### Test count
+
+- Unit: 113 → 120
+- Integration: 9 (unchanged)
+- Total: 122 → 129
 
 ## [0.1.0] — 2026-04-08
 
@@ -89,5 +100,6 @@ First public release. Pre-1.0: the CLI surface is usable but may change.
 - `docs/plans/` and `docs/brainstorms/` (gitignored) contain the brainstorm
   and implementation plan that preceded the code.
 
-[Unreleased]: https://github.com/ajanderson1/claude-later/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ajanderson1/claude-later/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ajanderson1/claude-later/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ajanderson1/claude-later/releases/tag/v0.1.0
