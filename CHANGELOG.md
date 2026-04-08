@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-04-08
+
+### Added
+
+- **`--resume-name NAME` synthetic sub-flag** inside `--claude-args`. Resolves
+  a Claude Code session by its `/rename`'d display name at arm time: scans
+  the current cwd's transcripts (`~/.claude/projects/-<cwd-slug>/*.jsonl`)
+  for matching `customTitle` or `agentName` JSON events, extracts the
+  session UUID, and rewrites the claude_args array to `--resume <uuid>`
+  before firing. Exact match only; zero-match and multi-match both abort
+  with specific error messages. Cannot be combined with `--resume`. The
+  banner shows both the name and the resolved UUID so you see what fires.
+  - Rationale: typing UUIDs for rate-limit recovery is annoying when you
+    can `/rename` sessions to memorable names. This provides a
+    name→UUID resolver without inventing a non-claude top-level flag.
+- **9 new failure-mode tests** covering the `--resume-name` resolver:
+  zero matches, multi-match, missing value, conflict with `--resume`,
+  duplicate `--resume-name`, successful resolution (with synthetic test
+  transcripts), and banner format assertions.
+
+### Changed
+
+- Conflict detection for `--resume` vs `--resume-name` now happens in a
+  fast upfront pass over the token list, before the resolver runs. This
+  ensures conflicts fail immediately with the right error regardless of
+  which flag appears first in the string.
+
+### Test count
+
+- Unit: 143 → 152
+- Integration: 9 (unchanged)
+- Total: 152 → 161
+
 ## [0.2.0] — 2026-04-08
 
 **Breaking:** the top-level `--resume UUID` flag is removed. Resume now lives
@@ -169,7 +202,8 @@ First public release. Pre-1.0: the CLI surface is usable but may change.
 - `docs/plans/` and `docs/brainstorms/` (gitignored) contain the brainstorm
   and implementation plan that preceded the code.
 
-[Unreleased]: https://github.com/ajanderson1/claude-later/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ajanderson1/claude-later/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ajanderson1/claude-later/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ajanderson1/claude-later/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/ajanderson1/claude-later/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ajanderson1/claude-later/releases/tag/v0.1.0

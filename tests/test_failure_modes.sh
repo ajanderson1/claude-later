@@ -155,6 +155,28 @@ assert_fails_with "--claude-args --resume non-UUID rejected" "--resume value mus
 assert_fails_with "--claude-args --resume shell-injection attempt rejected" "single quotes" \
   "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume '\$(whoami)'" "x"
 
+printf '\n=== --claude-args --resume-name resolver ===\n'
+
+# Nonexistent name — zero matches
+assert_fails_with "--resume-name nonexistent session rejected" "no session named" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume-name NoSuchSessionXYZ12345" "x"
+
+# Missing value
+assert_fails_with "--resume-name missing value rejected" "requires a value" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume-name" "x"
+
+# --resume and --resume-name conflict — resume-first
+assert_fails_with "--resume + --resume-name conflict (resume first) rejected" "cannot use both" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume 7f3a4c12-0000-4000-8000-000000000000 --resume-name SomeName" "x"
+
+# --resume and --resume-name conflict — resume-name first
+assert_fails_with "--resume-name + --resume conflict (name first) rejected" "cannot use both" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume-name SomeName --resume 7f3a4c12-0000-4000-8000-000000000000" "x"
+
+# Duplicate --resume-name
+assert_fails_with "--resume-name twice rejected" "may only appear once" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume-name A --resume-name B" "x"
+
 printf '\n=== --claude-args allowlist passes happy cases ===\n'
 
 # Valid cases must NOT abort. We use --dry-run and grep for the ARMED banner.
@@ -187,6 +209,60 @@ else
   printf '%s\n' "$output" | head -5 | sed 's/^/      /'
   FAIL=$((FAIL + 1))
 fi
+
+printf '\n=== --resume-name resolves a real session ===\n'
+
+# Create a synthetic session transcript file in the fake project dir that
+# setup_fake_project_dir created, with a known custom-title, then resolve it.
+TEST_SESSION_UUID="c0ffee12-0000-4000-8000-000000000001"
+TEST_SESSION_NAME="CLAUDE_LATER_TEST_SESSION_$$"
+FAKE_TRANSCRIPT="$CL_FAKE_PROJ_DIR/$TEST_SESSION_UUID.jsonl"
+cat > "$FAKE_TRANSCRIPT" <<EOF
+{"type":"custom-title","customTitle":"$TEST_SESSION_NAME","sessionId":"$TEST_SESSION_UUID"}
+{"type":"agent-name","agentName":"$TEST_SESSION_NAME","sessionId":"$TEST_SESSION_UUID"}
+EOF
+
+output=$("$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume-name $TEST_SESSION_NAME" "resolver test" 2>&1 || true)
+if printf '%s' "$output" | grep -q 'claude-later ARMED'; then
+  printf '  PASS: --resume-name armed successfully\n'
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: --resume-name did not arm\n'
+  printf '%s\n' "$output" | head -10 | sed 's/^/      /'
+  FAIL=$((FAIL + 1))
+fi
+
+# The banner should show the resolution line
+if printf '%s' "$output" | grep -q "resolved --resume-name $TEST_SESSION_NAME"; then
+  printf '  PASS: banner shows name resolution\n'
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: banner does not show name resolution\n'
+  printf '%s\n' "$output" | head -20 | sed 's/^/      /'
+  FAIL=$((FAIL + 1))
+fi
+
+# The invocation line should show the REAL --resume UUID (not the name)
+if printf '%s' "$output" | grep -q -- "--resume $TEST_SESSION_UUID"; then
+  printf '  PASS: invocation shows resolved UUID\n'
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: invocation does not show resolved UUID\n'
+  printf '%s\n' "$output" | head -20 | sed 's/^/      /'
+  FAIL=$((FAIL + 1))
+fi
+
+# Duplicate name: create a second transcript with the same name, then assert
+# the resolver aborts with a multi-match error
+TEST_SESSION_UUID2="c0ffee12-0000-4000-8000-000000000002"
+cat > "$CL_FAKE_PROJ_DIR/$TEST_SESSION_UUID2.jsonl" <<EOF
+{"type":"custom-title","customTitle":"$TEST_SESSION_NAME","sessionId":"$TEST_SESSION_UUID2"}
+EOF
+assert_fails_with "--resume-name multi-match rejected" "multiple sessions named" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume-name $TEST_SESSION_NAME" "x"
+
+# Clean up the fake transcripts
+rm -f "$FAKE_TRANSCRIPT" "$CL_FAKE_PROJ_DIR/$TEST_SESSION_UUID2.jsonl"
 
 printf '\n=== message content validation ===\n'
 

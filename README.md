@@ -17,7 +17,7 @@
 
 # claude-later
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility)
 [![Terminal: iTerm2](https://img.shields.io/badge/terminal-iTerm2-8A2BE2.svg)](https://iterm2.com)
@@ -104,7 +104,7 @@ For broader compatibility plans, see [ROADMAP.md](ROADMAP.md).
 ```sh
 git clone https://github.com/ajanderson1/claude-later.git ~/GitHub/claude-later
 ln -s ~/GitHub/claude-later/claude-later /usr/local/bin/claude-later
-claude-later --version  # should print: claude-later 0.2.0
+claude-later --version  # should print: claude-later 0.2.1
 ```
 
 First time you run `claude-later`, macOS will prompt for permission for your shell's parent process (iTerm2 or the process invoking it) to control iTerm2 via AppleScript. Grant it — this is System Settings → Privacy & Security → Automation.
@@ -155,15 +155,19 @@ claude-later --in 1h --claude-args "--teammate-mode tmux" "..."
 # Multiple flags
 claude-later --in 1h --claude-args "--teammate-mode tmux --model opus --effort high" "..."
 
-# Session resume (rate-limit recovery)
+# Session resume by UUID (rate-limit recovery)
 claude-later --at 14:05 --claude-args "--resume 7f3a4c12-0000-4000-8000-000000000000" "continue"
+
+# Session resume by name (convenience — resolved at arm time)
+# Use `/rename` inside a Claude Code session to set a display name first.
+claude-later --at 14:05 --claude-args "--resume-name nightly-refactor" "continue"
 ```
 
 **Allowlist** (only these sub-flags may appear inside `--claude-args`):
-`--resume` / `-r`, `--continue` / `-c`, `--model`, `--teammate-mode`,
-`--agent`, `--effort`, `--permission-mode`, `--name` / `-n`,
-`--append-system-prompt`, `--system-prompt`, `--fork-session`, `--add-dir`,
-`--mcp-config`, `--settings`.
+`--resume` / `-r`, `--resume-name` (synthetic — see below), `--continue` / `-c`,
+`--model`, `--teammate-mode`, `--agent`, `--effort`, `--permission-mode`,
+`--name` / `-n`, `--append-system-prompt`, `--system-prompt`, `--fork-session`,
+`--add-dir`, `--mcp-config`, `--settings`.
 
 **Blocklist** (hard reject with a specific reason):
 `-p` / `--print` (headless, defeats the purpose), `-h` / `--help` and
@@ -180,6 +184,39 @@ IDs conflict with fresh-session assumptions).
 - No flag allowed by claude outside the allowlist is permitted. If you
   need a flag that isn't on the list, open an issue — adding flags is
   cheap.
+
+#### `--resume-name NAME` (synthetic convenience)
+
+`--resume-name` is not a real claude flag. It's a claude-later synthetic
+that scans the current cwd's Claude Code transcripts (`~/.claude/projects/-<cwd-slug>/*.jsonl`)
+for a session with a matching `/rename`'d display name, then rewrites the
+sub-flag to `--resume <uuid>` before firing. The banner shows both the
+name and the resolved UUID so you see exactly what will fire:
+
+```text
+Invocation: claude --teammate-mode tmux --resume 1048088f-05c8-4140-9098-ea9590db9bf6
+            (resolved --resume-name TESTING_V0.2 -> 1048088f-05c8-4140-9098-ea9590db9bf6)
+```
+
+Rules:
+- **Exact match only**, no wildcards or substring matching.
+- **Only the current cwd's project dir is searched** — same scope as the
+  `--resume UUID` transcript-existence check.
+- **Zero matches** aborts with `no session named '<name>' found in <dir>`.
+- **Multiple matches** aborts with a list of matching UUIDs so you can
+  disambiguate manually via `--resume <uuid>`.
+- **Cannot be combined with `--resume`** — they target the same thing.
+- **May only appear once.**
+
+To give a session a display name, use the `/rename` slash command inside
+a running Claude Code session:
+
+```text
+/rename nightly-refactor
+```
+
+This writes a `custom-title` event into the transcript that `--resume-name`
+then matches against.
 
 ### Prompt from a variable
 

@@ -14,7 +14,7 @@ CL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$CL_DIR/lib/state.sh"
 . "$CL_DIR/lib/osa.sh"
 
-CL_VERSION="0.2.0"
+CL_VERSION="0.2.1"
 
 # Parsed args
 ARG_AT=""
@@ -31,6 +31,11 @@ ARG_MESSAGE=""
 # will be exec'd verbatim into claude at fire time:
 #   claude "${CL_CLAUDE_ARGS_ARR[@]}"
 CL_CLAUDE_ARGS_ARR=()
+
+# If --resume-name NAME was used inside --claude-args, this records the
+# name→UUID resolution for the banner. Format: "NAME -> UUID". Empty if
+# --resume-name was not used.
+CL_RESUME_NAME_RESOLUTION=""
 
 # Captured during pre-flight
 CL_CLAUDE_PATH=""
@@ -80,9 +85,10 @@ CLAUDE-ARGS ALLOWLIST
   Only these sub-flags may appear inside --claude-args. Passing anything
   outside the allowlist (or inside the blocklist) is rejected at arm time.
   Allowlist:
-    --resume / -r, --continue / -c, --model, --teammate-mode, --agent,
-    --effort, --permission-mode, --name / -n, --append-system-prompt,
-    --system-prompt, --fork-session, --add-dir, --mcp-config, --settings
+    --resume / -r, --resume-name, --continue / -c, --model,
+    --teammate-mode, --agent, --effort, --permission-mode, --name / -n,
+    --append-system-prompt, --system-prompt, --fork-session, --add-dir,
+    --mcp-config, --settings
   Blocklist (always rejected with explicit reason):
     -p / --print         (headless, defeats claude-later)
     -h / --help          (exits immediately)
@@ -92,6 +98,14 @@ CLAUDE-ARGS ALLOWLIST
     -d / --debug, --debug-file  (TUI-breaking output)
     -w / --worktree      (changes cwd, violates first-run hygiene pre-flight)
     --session-id         (fixed session ID)
+
+  Synthetic sub-flags (claude-later convenience, resolved at arm time):
+    --resume-name NAME   Resolve NAME to a session UUID by scanning the
+                         current cwd's Claude Code transcripts for a
+                         /rename'd session with that exact name, then
+                         rewrite to --resume <uuid> before firing. Exact
+                         match only; aborts on zero matches or multiple
+                         matches. Cannot be combined with --resume.
 
 REQUIREMENTS
   - macOS only.
@@ -191,6 +205,73 @@ pf_3_time_parsing() {
   fi
 }
 
+# _resolve_resume_name "$name"
+# Look up a Claude Code session by its /rename'd name in the current cwd's
+# project transcript directory. Echoes the matched UUID on success. Aborts
+# on zero matches or multiple matches.
+#
+# Name matching: the /rename command writes two JSONL event lines per
+# rename:
+#   {"type":"custom-title","customTitle":"<NAME>","sessionId":"<UUID>"}
+#   {"type":"agent-name","agentName":"<NAME>","sessionId":"<UUID>"}
+# We grep for either — they're written together and should stay in sync.
+#
+# Scope: only transcripts under ~/.claude/projects/-<cwd-slug>/ (current
+# directory's project dir). A name like "TESTING_V0.2" could exist in
+# multiple projects; we always resolve within the cwd the user armed from.
+#
+# Exact match only — no wildcards, no substring matching. The name must
+# match byte-for-byte (after JSON string escaping, but since /rename names
+# don't usually contain control chars this is effectively a literal match).
+_resolve_resume_name() {
+  local name=$1
+  local cwd_slug
+  cwd_slug=$(printf '%s' "$PWD" | sed -e 's|/|-|g' -e 's|_|-|g')
+  local proj_dir="$HOME/.claude/projects/-${cwd_slug#-}"
+  if [ ! -d "$proj_dir" ]; then
+    abort "--claude-args: --resume-name lookup failed — no project directory at $proj_dir (claude has never run in this cwd)" 1
+  fi
+
+  # Build the two match needles. JSON strings embed the name exactly as
+  # typed by the user; we already rejected control chars, quotes, and
+  # newlines in the global sanitation rail, so the name is safe to
+  # interpolate literally into a grep pattern.
+  #
+  # Escape grep regex metachars in the name so e.g. "TESTING_V0.2" matches
+  # literally (the `.` is the only character in that example that could
+  # cause a false match, but belt and braces).
+  local name_escaped
+  name_escaped=$(printf '%s' "$name" | sed -e 's/[][\.*+?^$(){}|/]/\\&/g')
+  local needle1="\"customTitle\":\"${name_escaped}\""
+  local needle2="\"agentName\":\"${name_escaped}\""
+
+  # Find transcripts containing either needle. Each match gives a filename;
+  # strip .jsonl to get the UUID.
+  local matches
+  matches=$(grep -l -e "$needle1" -e "$needle2" "$proj_dir"/*.jsonl 2>/dev/null)
+
+  if [ -z "$matches" ]; then
+    abort "--claude-args: no session named '$name' found in $proj_dir (use 'claude --resume' in that directory to see the full session list, or verify the name via /rename inside a session)" 1
+  fi
+
+  # Count matches and extract UUIDs. matches is newline-separated.
+  local match_count uuids
+  match_count=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
+  uuids=$(printf '%s\n' "$matches" | while read -r path; do
+    basename "$path" .jsonl
+  done | sort -u)
+  local uuid_count
+  uuid_count=$(printf '%s\n' "$uuids" | wc -l | tr -d ' ')
+
+  if [ "$uuid_count" -gt 1 ]; then
+    local list
+    list=$(printf '%s\n' "$uuids" | tr '\n' ',' | sed 's/,$//')
+    abort "--claude-args: multiple sessions named '$name' in $proj_dir — disambiguate by passing --resume <uuid> directly. Matching UUIDs: $list" 1
+  fi
+
+  printf '%s\n' "$uuids"
+}
+
 # pf_4_claude_args — validate --claude-args passthrough string.
 #
 # Enforces all three of our safety rails:
@@ -243,6 +324,7 @@ pf_4_claude_args() {
   _is_allowed_flag() {
     case "$1" in
       --resume|-r) return 0 ;;
+      --resume-name) return 0 ;;  # claude-later synthetic: resolves to --resume UUID at arm time
       --continue|-c) return 0 ;;
       --model) return 0 ;;
       --teammate-mode) return 0 ;;
@@ -262,9 +344,9 @@ pf_4_claude_args() {
   _flag_takes_value() {
     case "$1" in
       --continue|-c|--fork-session) return 1 ;;  # boolean, no value
-      --resume|-r|--model|--teammate-mode|--agent|--effort|--permission-mode|\
-      --name|-n|--append-system-prompt|--system-prompt|--add-dir|--mcp-config|\
-      --settings) return 0 ;;
+      --resume|-r|--resume-name|--model|--teammate-mode|--agent|--effort|\
+      --permission-mode|--name|-n|--append-system-prompt|--system-prompt|\
+      --add-dir|--mcp-config|--settings) return 0 ;;
       *) return 1 ;;
     esac
   }
@@ -283,8 +365,34 @@ pf_4_claude_args() {
     esac
   }
 
-  # State machine: walk tokens, every flag must be allowed and not blocked,
-  # flags that take values consume the next token.
+  # Upfront conflict check for resume-family flags. We do this BEFORE the
+  # main state machine loop so we can fail fast on conflict without
+  # triggering the (potentially slow) --resume-name resolver.
+  #
+  # Two resume-family flags are handled specially:
+  #   --resume UUID       — passed through verbatim, UUID validated + transcript checked
+  #   --resume-name NAME  — synthetic; resolved to a UUID at arm time, then REWRITTEN
+  #                         to `--resume <resolved-uuid>` in the output array. The
+  #                         synthetic flag never reaches the claude exec.
+  # Using BOTH in the same --claude-args is an error (they target the same thing).
+  local _tc_resume=0
+  local _tc_resume_name=0
+  local _j
+  for (( _j=0; _j<${#tokens[@]}; _j++ )); do
+    case "${tokens[$_j]}" in
+      --resume|-r) _tc_resume=$((_tc_resume + 1)) ;;
+      --resume-name) _tc_resume_name=$((_tc_resume_name + 1)) ;;
+    esac
+  done
+  if [ "$_tc_resume" -gt 0 ] && [ "$_tc_resume_name" -gt 0 ]; then
+    abort "--claude-args: cannot use both --resume-name and --resume in the same invocation" 64
+  fi
+  if [ "$_tc_resume_name" -gt 1 ]; then
+    abort "--claude-args: --resume-name may only appear once" 64
+  fi
+
+  local saw_resume=0
+  local saw_resume_name=0
   local i=0
   local n=${#tokens[@]}
   while [ "$i" -lt "$n" ]; do
@@ -302,7 +410,6 @@ pf_4_claude_args() {
         if ! _is_allowed_flag "$tok"; then
           abort "--claude-args: sub-flag '$tok' is not in the allowlist (see --help for the full list)" 64
         fi
-        CL_CLAUDE_ARGS_ARR+=("$tok")
         # Does it consume the next token?
         if _flag_takes_value "$tok"; then
           i=$((i + 1))
@@ -318,8 +425,14 @@ pf_4_claude_args() {
           case "$val" in
             -*) abort "--claude-args: sub-flag '$tok' requires a value; got another flag-like token '$val'" 64 ;;
           esac
-          # Special-case resume: validate UUID regex + check transcript
+
+          # Resume family — conflict check and special handling
           if [ "$tok" = "--resume" ] || [ "$tok" = "-r" ]; then
+            if [ "$saw_resume_name" -eq 1 ]; then
+              abort "--claude-args: cannot use both --resume-name and --resume in the same invocation" 64
+            fi
+            saw_resume=1
+            # Validate UUID regex + check transcript
             if ! [[ "$val" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
               abort "--claude-args: --resume value must be a UUID (got '$val')" 64
             fi
@@ -329,8 +442,31 @@ pf_4_claude_args() {
             if [ ! -r "$transcript" ]; then
               printf 'claude-later: warning: --resume transcript not found at %s (will try anyway)\n' "$transcript" >&2
             fi
+            CL_CLAUDE_ARGS_ARR+=("$tok" "$val")
+          elif [ "$tok" = "--resume-name" ]; then
+            if [ "$saw_resume" -eq 1 ]; then
+              abort "--claude-args: cannot use both --resume-name and --resume in the same invocation" 64
+            fi
+            if [ "$saw_resume_name" -eq 1 ]; then
+              abort "--claude-args: --resume-name may only appear once" 64
+            fi
+            saw_resume_name=1
+            # Resolve the name to a UUID. _resolve_resume_name aborts on
+            # zero matches / multi-match; on success it echoes the UUID.
+            local resolved_uuid
+            resolved_uuid=$(_resolve_resume_name "$val") || exit 1
+            # Record the resolution for the banner
+            CL_RESUME_NAME_RESOLUTION="$val -> $resolved_uuid"
+            # Rewrite: the synthetic --resume-name becomes a real --resume UUID
+            # in the output array that gets exec'd into claude.
+            CL_CLAUDE_ARGS_ARR+=("--resume" "$resolved_uuid")
+          else
+            # Normal pass-through (non-resume-family flag with value)
+            CL_CLAUDE_ARGS_ARR+=("$tok" "$val")
           fi
-          CL_CLAUDE_ARGS_ARR+=("$val")
+        else
+          # Flag with no value (boolean flag)
+          CL_CLAUDE_ARGS_ARR+=("$tok")
         fi
         ;;
       *)
@@ -469,6 +605,9 @@ print_armed_banner() {
       printf ' %q' "$arg"
     done
     printf '\n'
+    if [ -n "$CL_RESUME_NAME_RESOLUTION" ]; then
+      printf '              (resolved --resume-name %s)\n' "$CL_RESUME_NAME_RESOLUTION"
+    fi
   else
     printf '  Invocation: claude (no passthrough args)\n'
   fi
