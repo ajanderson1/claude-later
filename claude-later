@@ -193,6 +193,9 @@ pf_5_message_content() {
   fi
   # Reject other control characters (not newline since we already checked above,
   # but still block tabs, escape, NUL, etc. — printable + space only).
+  # Pipe-into-grep is safe here because $ARG_MESSAGE is bounded to a single
+  # line (the multi-line check above guarantees it) — well under pipe buffer
+  # size, so the SIGPIPE-vs-pipefail bug class can't trigger.
   if printf '%s' "$ARG_MESSAGE" | LC_ALL=C grep -q '[^[:print:]]'; then
     abort "message contains non-printable characters" 64
   fi
@@ -227,12 +230,15 @@ pf_8_power_sleep() {
   # Detect AC power
   local power
   power=$(pmset -g ps 2>/dev/null | head -1)
-  if printf '%s' "$power" | grep -qi "Battery Power"; then
-    if [ "$ARG_ALLOW_BATTERY" -eq 0 ]; then
-      abort "on battery power. Plug in, or pass --allow-battery to override." 1
-    fi
-    printf 'claude-later: warning: on battery and --allow-battery is set; the Mac may sleep.\n' >&2
-  fi
+  # Case-glob instead of pipe-into-grep — see SIGPIPE-vs-pipefail bug class.
+  case "$power" in
+    *"Battery Power"*|*"battery power"*)
+      if [ "$ARG_ALLOW_BATTERY" -eq 0 ]; then
+        abort "on battery power. Plug in, or pass --allow-battery to override." 1
+      fi
+      printf 'claude-later: warning: on battery and --allow-battery is set; the Mac may sleep.\n' >&2
+      ;;
+  esac
 }
 
 pf_9_state_file() {

@@ -256,7 +256,80 @@ osa_contents_hash() {
 # Returns 0 if the pane contents include the steady-state Claude Code prompt
 # glyph (the heavy right-pointing angle quotation mark, U+276F). This is the
 # defense-in-depth secondary check from Unit 0 spike #3.
+#
+# IMPORTANT: do NOT use a pipe (`osa_get_contents | grep`) here. Under
+# `set -uo pipefail` (which both claude-later and claude-later-helper use),
+# a pipeline where grep finds an early match and exits before the upstream
+# finishes writing causes the upstream to receive SIGPIPE (rc=141), which
+# pipefail then propagates as the pipeline's rc. The result: the function
+# returns "false" even when the glyph is present, but only on panes with
+# large scrollbacks (small panes finish their write in one syscall and
+# never trip SIGPIPE). This was a real production bug masked by the live
+# test pane being small enough to avoid the trigger condition.
 osa_contents_has_prompt() {
   local uuid=$1
-  osa_get_contents "$uuid" | grep -q '❯'
+  local contents
+  contents=$(osa_get_contents "$uuid") || return 1
+  case "$contents" in
+    *❯*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# osa_contents_has_spinner "$uuid"
+# Returns 0 if the pane contains Claude Code's live busy-state indicator.
+#
+# Claude Code's busy indicator has the form:
+#   <cycling-glyph> <Verb>… (<elapsed-time> · <arrow> <N>k tokens)
+# where:
+#   - cycling-glyph rotates through ✢ ✻ · ⏺ ✺ ⊛ ✳ etc every ~100ms
+#   - Verb rotates per-turn through Working, Thinking, Pontificating,
+#     Seasoning, Musing, Cooking, Germinating, Simmering, Stewing, ...
+#   - elapsed-time ticks every second (`12s`, `2m 30s`, etc.)
+#   - arrow is ↓ (input) or ↑ (output) plus a tokens counter
+#
+# The only element that is ~always present for a busy claude is the
+# parenthesized `(Xs · ↓ N tokens)` or `(Xm Ys · ↑ N tokens)` pattern —
+# all other pieces vary. That's our signal. Idle claude never shows this.
+#
+# Used by the helper as a fast-path positive-idle check: if `❯` is present
+# AND this spinner check is FALSE, claude is definitively idle-waiting.
+#
+# Same pipefail/SIGPIPE caveat as osa_contents_has_prompt — capture into a
+# variable, then grep against the variable.
+osa_contents_has_spinner() {
+  local uuid=$1
+  local contents
+  contents=$(osa_get_contents "$uuid") || return 1
+  # Use bash case-glob with the spinner pattern. We can't use a regex but
+  # we can match the load-bearing fragment: a parenthesized "Xs · ↓" or
+  # "Xm Ys · ↑" pattern. Glob patterns can do this with a few carefully
+  # ordered cases.
+  case "$contents" in
+    *"s · ↓"*tokens*) return 0 ;;
+    *"s · ↑"*tokens*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# osa_contents_is_idle "$uuid"
+# Returns 0 iff the pane contains `❯` AND does NOT contain a busy spinner.
+# This is the "definitively idle and ready to accept input" signal used by
+# the helper's readiness detector fast path.
+osa_contents_is_idle() {
+  local uuid=$1
+  local contents
+  contents=$(osa_get_contents "$uuid") || return 1
+  # Must contain the ❯ glyph
+  case "$contents" in
+    *❯*) ;;
+    *) return 1 ;;
+  esac
+  # Must NOT contain a busy spinner (same case-glob pattern as
+  # osa_contents_has_spinner).
+  case "$contents" in
+    *"s · ↓"*tokens*) return 1 ;;
+    *"s · ↑"*tokens*) return 1 ;;
+  esac
+  return 0
 }

@@ -190,8 +190,12 @@ state_check_stale() {
   fi
   local cmd
   cmd=$(ps -p "$prior_pid" -o command= 2>/dev/null)
-  if ! printf '%s' "$cmd" | grep -q "claude-later"; then
-    printf 'stale\n'; return 0
-  fi
+  # Use case-glob instead of pipe-into-grep to avoid the SIGPIPE-vs-pipefail
+  # bug class. See lib/osa.sh osa_contents_has_prompt for the full
+  # explanation and tests/test_sigpipe_regression.sh for the regression.
+  case "$cmd" in
+    *claude-later*) ;;
+    *) printf 'stale\n'; return 0 ;;
+  esac
   printf 'live %s %s\n' "$prior_pid" "$prior_target"
 }

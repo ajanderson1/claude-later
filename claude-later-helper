@@ -172,6 +172,20 @@ main() {
       exit 1
     fi
 
+    # FAST PATH: if the contents show `❯` AND no busy spinner, claude is
+    # definitively idle and ready to accept input. Don't bother with
+    # hash-stability counting — a positive idle signal is stronger than any
+    # stability proxy. This handles the case where a live spinner would
+    # prevent the hash from ever stabilising.
+    if osa_contents_is_idle "$uuid"; then
+      log_event "helper readiness OK (idle fast path)"
+      break
+    fi
+
+    # SLOW PATH: no definitive idle signal yet. Fall back to the original
+    # hash-stability detector. This still serves as a defense-in-depth for:
+    #   - early boot where contents don't yet contain ❯
+    #   - unexpected future claude versions where the spinner marker changes
     local hash
     hash=$(osa_contents_hash "$uuid")
     if [ "$hash" = "$last_hash" ]; then
@@ -185,7 +199,7 @@ main() {
     if [ "$stable_count" -ge "$HELPER_STABLE_POLL_COUNT" ]; then
       # Stable. Now check the secondary signal: ❯ glyph present.
       if osa_contents_has_prompt "$uuid"; then
-        log_event "helper readiness OK stable_for=$stable_count"
+        log_event "helper readiness OK stable_for=$stable_count (slow path)"
         break
       else
         # Stable but no prompt yet -> claude is likely mid-boot (splash shown,

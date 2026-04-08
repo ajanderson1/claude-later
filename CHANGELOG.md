@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **SIGPIPE-vs-pipefail bug in `osa_contents_has_prompt`**: under `set -uo
+  pipefail` (which both `claude-later` and `claude-later-helper` use), the
+  `osa_get_contents | grep -q '❯'` pattern returned false when the upstream
+  output exceeded the pipe buffer (~64KB) because grep would find the match
+  early, exit, and the upstream's next write would receive SIGPIPE (rc=141)
+  which `pipefail` propagates as the pipeline rc. The bug only triggered on
+  panes with large scrollbacks; small panes' single-syscall writes never
+  tripped it. Fixed by capturing contents into a variable and using bash
+  case-glob instead of pipe-and-grep. Same fix applied to `state_check_stale`
+  and `pf_8_power_sleep` for consistency, even though those weren't likely
+  to encounter the trigger condition.
+
+### Added
+
+- `osa_contents_has_spinner` and `osa_contents_is_idle` in `lib/osa.sh`:
+  positive-idle detection that recognises Claude Code's busy-state indicator
+  (`(Xs · ↓ N tokens)` pattern) and inverts it. The helper's readiness
+  detector now uses `is_idle` as a fast path before falling back to the
+  hash-stability check, eliminating a class of "spinner-active at fire time"
+  failures where the hash would never stabilise within the 60s budget.
+- `tests/test_sigpipe_regression.sh` (5 tests): reproduces the SIGPIPE bug
+  condition, validates the fix, and asserts all three osa.sh content-check
+  functions return clean 0/1 (never 141) under pipefail with a real
+  large-scrollback pane.
+- `tests/test_tail_slicing.sh` extended (+2 tests): added invariant checks
+  for `osa_contents_has_spinner` / `osa_contents_is_idle` consistency, and
+  changed the hash-stability check from a flaky WARN to a clean SKIP when
+  run against a busy Claude pane.
+
 ## [0.1.0] — 2026-04-08
 
 First public release. Pre-1.0: the CLI surface is usable but may change.
