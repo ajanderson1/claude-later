@@ -1,0 +1,262 @@
+#!/bin/bash
+# claude-later-helper — detached helper that drives the message into the live
+# Claude Code TUI from outside the iTerm2 pane.
+#
+# Spawned by `claude-later` at T-5s via:
+#   nohup claude-later-helper "$state_path" </dev/null >>"$log_path" 2>&1 & disown
+#
+# Lifecycle:
+#   1. Read state file (path passed via argv).
+#   2. Open the same log file the in-pane script wrote to (append mode).
+#   3. Write helper_pid into the state file as the FIRST action.
+#   4. Install SIGTERM handler: read script's tombstone status, fire notification, exit.
+#   5. Poll iTerm2 contents via osa_contents_hash + osa_contents_has_prompt
+#      until stable for N consecutive polls (readiness signal from spike #3).
+#   6. On readiness timeout (60s after fire) -> mark tui_not_ready, notify, exit.
+#   7. On unexpected state (stable but no ❯ glyph) -> mark unexpected_modal, notify, exit.
+#   8. On session_died -> mark session_died, notify, exit.
+#   9. On steady-state ready -> osa_write_text, mark `delivered` IMMEDIATELY,
+#      then run post-send observation under separate 30s budget, fire notification, exit.
+#  10. Hard cap: 5 minutes total before write_text -> helper_timeout, exit.
+#
+# Notification ownership rule: after T-5s, only the helper notifies.
+
+set -uo pipefail
+
+CL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$CL_DIR/lib/util.sh"
+. "$CL_DIR/lib/state.sh"
+. "$CL_DIR/lib/osa.sh"
+
+# Tunables (could come from state file or env in v2; spike #3 informed values)
+HELPER_POLL_INTERVAL=0.25       # 250ms requested; actual cadence ~1.3s due to osascript cold start
+HELPER_STABLE_POLL_COUNT=3      # consecutive identical hashes => steady state
+HELPER_READY_TIMEOUT=60         # seconds before tui_not_ready
+HELPER_HARD_CAP=300             # 5 minutes total before write_text
+HELPER_POST_SEND_WAIT=5         # seconds to wait after write_text before snapshot
+HELPER_POST_SEND_BUDGET=30      # post-send observation budget (separate from hard cap)
+HELPER_CONTENTS_TAIL=80         # lines of scrollback tail to hash/scan per poll
+                                # Why: claude's TUI reserves the bottom ~15 lines
+                                # for the input box + status bar. 80 lines covers
+                                # that plus the welcome banner and any transient
+                                # spinner rows. Hashing only the tail makes the
+                                # stable-hash detector resilient to scrollback
+                                # reflow on window resize and eliminates osascript
+                                # latency on large histories.
+
+usage() {
+  cat <<'EOF'
+claude-later-helper — internal helper for claude-later
+
+USAGE
+  claude-later-helper /path/to/state.json
+
+This is invoked by claude-later at T-5s via nohup+disown. Do not invoke manually.
+EOF
+}
+
+# State file path is the only argument.
+STATE_PATH=""
+HELPER_STARTED_AT=0
+TARGET_EPOCH=0
+TARGET_UUID=""
+TARGET_MESSAGE=""
+TARGET_LOG=""
+
+# Notification helper that respects the ownership rule: read the current
+# script status from the state file and notify with that as the headline.
+notify_with_status() {
+  local fallback_status=$1
+  local detail=${2:-}
+  local current_status
+  current_status=$(state_read "$STATE_PATH" .status 2>/dev/null) || current_status="$fallback_status"
+  if [ -z "$current_status" ] || [ "$current_status" = "null" ]; then
+    current_status="$fallback_status"
+  fi
+  local title="claude-later: $current_status"
+  local body="${detail:-(no detail)}"
+  notify "$title" "$body"
+}
+
+# SIGTERM handler — when the in-pane script SIGTERMs us after T-5s, it has
+# already written the script's tombstone status to the state file. We just
+# read that status, notify, and exit. We do NOT run our own diagnosis.
+on_sigterm() {
+  log_event "helper SIGTERM received pid=$$"
+  notify_with_status "killed_by_script"
+  exit 1
+}
+
+cleanup_and_exit() {
+  local code=$1
+  exit "$code"
+}
+
+main() {
+  if [ $# -eq 0 ] || [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+  fi
+
+  STATE_PATH=$1
+  HELPER_STARTED_AT=$(date +%s)
+
+  if [ ! -r "$STATE_PATH" ]; then
+    # We can't even open the state file. Best-effort notify and exit.
+    notify "claude-later: helper" "state file unreadable: $STATE_PATH"
+    exit 1
+  fi
+
+  # Load core fields from state.
+  TARGET_EPOCH=$(state_read "$STATE_PATH" .target_epoch) || { notify "claude-later: helper" "missing target_epoch in state"; exit 1; }
+  TARGET_UUID=$(state_read "$STATE_PATH" .iterm_session_id) || { notify "claude-later: helper" "missing iterm_session_id in state"; exit 1; }
+  TARGET_MESSAGE=$(state_read "$STATE_PATH" .message) || { notify "claude-later: helper" "missing message in state"; exit 1; }
+  TARGET_LOG=$(state_read "$STATE_PATH" .log_path) || { notify "claude-later: helper" "missing log_path in state"; exit 1; }
+
+  # Strip the wXtYpZ: prefix from the iterm_session_id.
+  local uuid="${TARGET_UUID#*:}"
+
+  # Open the log file (append).
+  log_init "$TARGET_LOG" || { notify "claude-later: helper" "cannot open log: $TARGET_LOG"; exit 1; }
+  log_event "helper started pid=$$ state=$STATE_PATH target_epoch=$TARGET_EPOCH"
+
+  # Step 3: Write helper_pid as our first action. Single writer of this field.
+  state_set_int "$STATE_PATH" "helper_pid" $$ || { log_event "helper FAILED to write helper_pid"; notify "claude-later: helper" "cannot update state file"; exit 1; }
+  log_event "helper recorded pid"
+
+  # Step 4: Install SIGTERM handler.
+  trap on_sigterm TERM
+
+  # Wait until the target time has actually arrived (the script execs at T-0,
+  # but we were spawned at T-5s; don't start polling pre-fire).
+  local now
+  now=$(date +%s)
+  if [ "$now" -lt "$TARGET_EPOCH" ]; then
+    local wait_for=$((TARGET_EPOCH - now))
+    log_event "helper sleeping until target wait=${wait_for}s"
+    sleep "$wait_for" &
+    local sleep_pid=$!
+    wait "$sleep_pid" 2>/dev/null || true
+  fi
+
+  # Step 5: Poll for steady-state TUI readiness.
+  # Constrain contents fetch to the tail-window for efficiency + resize resilience.
+  export CL_OSA_CONTENTS_TAIL=$HELPER_CONTENTS_TAIL
+  log_event "helper polling for readiness uuid=$uuid tail_lines=$HELPER_CONTENTS_TAIL"
+  local last_hash=""
+  local stable_count=0
+  local poll_started_at
+  poll_started_at=$(date +%s)
+  local readiness_deadline=$((poll_started_at + HELPER_READY_TIMEOUT))
+  local hard_cap_deadline=$((HELPER_STARTED_AT + HELPER_HARD_CAP))
+
+  while :; do
+    now=$(date +%s)
+    if [ "$now" -gt "$hard_cap_deadline" ]; then
+      log_event "helper hit hard cap"
+      state_mark "$STATE_PATH" "helper_timeout" "${HELPER_HARD_CAP}s exceeded before write_text"
+      notify "claude-later: helper_timeout" "${HELPER_HARD_CAP}s exceeded before delivery"
+      exit 1
+    fi
+    if [ "$now" -gt "$readiness_deadline" ]; then
+      log_event "helper readiness timeout"
+      state_mark "$STATE_PATH" "tui_not_ready" "${HELPER_READY_TIMEOUT}s readiness budget exceeded"
+      notify "claude-later: tui_not_ready" "Claude Code TUI did not reach steady-state prompt within ${HELPER_READY_TIMEOUT}s"
+      exit 1
+    fi
+
+    if ! osa_session_alive "$uuid"; then
+      log_event "helper detected session died"
+      state_mark "$STATE_PATH" "session_died" "iterm session id no longer resolves"
+      notify "claude-later: session_died" "iTerm2 session no longer exists"
+      exit 1
+    fi
+
+    local hash
+    hash=$(osa_contents_hash "$uuid")
+    if [ "$hash" = "$last_hash" ]; then
+      stable_count=$((stable_count + 1))
+    else
+      stable_count=1
+      last_hash=$hash
+    fi
+    log_event "helper poll hash=$hash stable=$stable_count"
+
+    if [ "$stable_count" -ge "$HELPER_STABLE_POLL_COUNT" ]; then
+      # Stable. Now check the secondary signal: ❯ glyph present.
+      if osa_contents_has_prompt "$uuid"; then
+        log_event "helper readiness OK stable_for=$stable_count"
+        break
+      else
+        # Stable but no prompt yet -> claude is likely mid-boot (splash shown,
+        # input box not yet drawn). Keep polling until readiness_deadline.
+        # Only fail if we're still in this state at the deadline.
+        log_event "helper stable_no_prompt keep_polling"
+      fi
+    fi
+
+    sleep "$HELPER_POLL_INTERVAL"
+  done
+  # Polling over — subsequent contents fetches (post-send snapshot) want full scrollback.
+  unset CL_OSA_CONTENTS_TAIL
+
+  # Step 9: Type the message.
+  # Last-moment Secure Input recheck: if Secure Input engaged between arm time
+  # (pf_6) and now (e.g. the user locked the screen, 1Password popped up, a
+  # sudo prompt from another process grabbed the kbd), iTerm2's `write text`
+  # will be silently dropped by the OS. Catch this BEFORE writing so we can
+  # tombstone correctly instead of appearing-to-succeed-but-nothing-typed.
+  if sec_input_engaged; then
+    log_event "helper Secure Input engaged at T-0 abort"
+    state_mark "$STATE_PATH" "secure_input_engaged" "Secure Input engaged at fire time; write_text would be silently dropped"
+    notify "claude-later: secure_input_engaged" "Secure Input engaged at fire time; message not delivered"
+    exit 1
+  fi
+  # Defense-in-depth: send Ctrl+U first to clear anything that may be sitting
+  # in the TUI's input buffer (residual pty bytes, user keystrokes, stray MOTD
+  # output, etc.). If this fails, log it but proceed — the message write is
+  # the load-bearing step, not the pre-clear.
+  if osa_write_ctrl_u "$uuid"; then
+    log_event "helper sent pre-clear Ctrl+U"
+  else
+    log_event "helper pre-clear Ctrl+U failed (non-fatal, continuing)"
+  fi
+  log_event "helper sending message bytes=${#TARGET_MESSAGE}"
+  if ! osa_write_text "$uuid" "$TARGET_MESSAGE"; then
+    local err hint
+    err=$(osa_last_error)
+    hint=$(_osa_classify_error "$err")
+    log_event "helper write_text FAILED hint=$hint err=$err"
+    state_mark "$STATE_PATH" "write_failed" "osa_write_text failed: $hint"
+    notify "claude-later: write_failed" "$hint"
+    exit 1
+  fi
+
+  # IMMEDIATELY mark delivered before any post-send wait.
+  state_mark "$STATE_PATH" "delivered"
+  log_event "helper marked delivered"
+
+  # Step 10: Post-send observation under separate budget.
+  local post_deadline=$(($(date +%s) + HELPER_POST_SEND_BUDGET))
+  sleep "$HELPER_POST_SEND_WAIT"
+  if [ "$(date +%s)" -gt "$post_deadline" ]; then
+    log_event "helper post-send observation timed out"
+    notify "claude-later: delivered" "(post-send observation timed out)"
+    exit 0
+  fi
+
+  # Optional pane snapshot if --log-pane-snapshots was set.
+  local snap_flag
+  snap_flag=$(state_read "$STATE_PATH" .log_pane_snapshots 2>/dev/null) || snap_flag="false"
+  if [ "$snap_flag" = "true" ]; then
+    log_event "helper post-send pane snapshot:"
+    osa_get_contents "$uuid" >> "$TARGET_LOG"
+    log_event "helper post-send pane snapshot END"
+  fi
+
+  notify "claude-later: delivered" "Message sent to Claude Code TUI"
+  log_event "helper delivered exit=0"
+  exit 0
+}
+
+main "$@"

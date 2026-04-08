@@ -1,0 +1,513 @@
+#!/bin/bash
+# claude-later — schedule a Claude Code message into an iTerm2 pane.
+#
+# See claude-later --help for usage.
+# See docs/brainstorms/claude-later-requirements.md and
+# docs/plans/2026-04-07-001-feat-claude-later-snippet-plan.md for the full design.
+# See claude-later/spikes/SPIKE.md for the empirical findings that shaped the implementation.
+
+set -uo pipefail
+
+CL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$CL_DIR/lib/util.sh"
+. "$CL_DIR/lib/time.sh"
+. "$CL_DIR/lib/state.sh"
+. "$CL_DIR/lib/osa.sh"
+
+CL_VERSION="0.1.0"
+
+# Parsed args
+ARG_AT=""
+ARG_IN=""
+ARG_RESUME=""
+ARG_DRY_RUN=0
+ARG_NO_CAFFEINATE=0
+ARG_ALLOW_BATTERY=0
+ARG_LOG_SNAPSHOTS=0
+ARG_SKIP_MCP_CHECK=0
+ARG_MESSAGE=""
+
+# Captured during pre-flight
+CL_CLAUDE_PATH=""
+CL_CLAUDE_VERSION=""
+CL_ITERM_VERSION=""
+CL_TARGET_EPOCH=0
+CL_ARMED_AT_EPOCH=0
+CL_PANE_ID=""
+CL_STATE_PATH=""
+CL_ACTIVE_PTR=""
+CL_LOG_PATH=""
+CL_HELPER_PID=""
+CL_LAST_SIGNAL=""
+
+usage() {
+  cat <<'EOF'
+claude-later — schedule a Claude Code message into an iTerm2 pane
+
+USAGE
+  claude-later --at TIME    [options] "message"
+  claude-later --in DURATION [options] "message"
+
+REQUIRED (exactly one)
+  --at TIME       Absolute time. Accepts:
+                    HH:MM                   (today if future, else tomorrow)
+                    HH:MM:SS
+                    YYYY-MM-DD HH:MM
+                    YYYY-MM-DD HH:MM:SS
+  --in DURATION   Relative time. Accepts: 30s, 5m, 4h, 2h30m, 1d12h, etc.
+
+OPTIONS
+  --resume UUID         Fire `claude --resume <uuid>` instead of a fresh session.
+  --dry-run             Run all pre-flight checks (including the visible probe)
+                        and print the ARMED banner, then exit without scheduling.
+  --no-caffeinate       Skip the auto-re-exec under `caffeinate -dimsu`.
+  --allow-battery       Override the on-battery abort.
+  --log-pane-snapshots  Capture full pane content snapshots into the log file.
+  --help                Show this message.
+  --version             Print version and exit.
+
+REQUIREMENTS
+  - macOS only.
+  - Must be run from inside an iTerm2 pane (not Terminal.app, not tmux/screen).
+  - `claude` must be on PATH and have run successfully in the cwd at least once.
+
+NOTES
+  - The message is a single-line trailing positional argument.
+  - State files: ~/.claude-later/state/
+  - Log files:   ~/.claude-later/logs/
+  - Closing the iTerm2 window cancels the job (with a tombstone + notification
+    if the helper has been spawned).
+EOF
+}
+
+abort() {
+  printf 'claude-later: %s\n' "$1" >&2
+  if [ -n "${CL_LOG_PATH:-}" ] && [ -n "${CL_LOG_PATH}" ]; then
+    log_event "ABORT $1" 2>/dev/null || true
+  fi
+  exit "${2:-1}"
+}
+
+# ---- Argument parsing -------------------------------------------------------
+
+parse_args() {
+  if [ $# -eq 0 ]; then
+    usage
+    exit 0
+  fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --help|-h) usage; exit 0;;
+      --version) printf 'claude-later %s\n' "$CL_VERSION"; exit 0;;
+      --at)      shift; ARG_AT=${1:-};;
+      --in)      shift; ARG_IN=${1:-};;
+      --resume)  shift; ARG_RESUME=${1:-};;
+      --dry-run) ARG_DRY_RUN=1;;
+      --no-caffeinate) ARG_NO_CAFFEINATE=1;;
+      --allow-battery) ARG_ALLOW_BATTERY=1;;
+      --log-pane-snapshots) ARG_LOG_SNAPSHOTS=1;;
+      --skip-mcp-check) ARG_SKIP_MCP_CHECK=1;;
+      --) shift; ARG_MESSAGE="$*"; return 0;;
+      -*) abort "unknown flag: $1" 64;;
+      *)  ARG_MESSAGE="$1";;
+    esac
+    shift
+  done
+}
+
+# ---- Pre-flight checks ------------------------------------------------------
+
+pf_1_platform_terminal() {
+  [ "$(uname -s)" = "Darwin" ] || abort "macOS only (uname=$(uname -s))" 1
+  [ "${TERM_PROGRAM:-}" = "iTerm.app" ] || abort "must be run from iTerm2 (TERM_PROGRAM=${TERM_PROGRAM:-unset})" 1
+  [ -n "${ITERM_SESSION_ID:-}" ] || abort "ITERM_SESSION_ID is unset" 1
+  [ -z "${TMUX:-}" ] || abort "claude-later does not support running inside tmux — keystroke targeting cannot be guaranteed" 1
+  [ -z "${STY:-}" ] || abort "claude-later does not support running inside GNU screen" 1
+
+  # ITERM_SESSION_ID strict allowlist regex
+  if ! [[ "$ITERM_SESSION_ID" =~ ^w[0-9]+t[0-9]+p[0-9]+:[0-9A-Fa-f-]{36}$ ]]; then
+    abort "ITERM_SESSION_ID format unexpected: $ITERM_SESSION_ID" 1
+  fi
+
+  CL_PANE_ID="${ITERM_SESSION_ID%%:*}"
+  CL_ITERM_VERSION=$(osa_iterm_version) || {
+    local hint
+    hint=$(_osa_classify_error "$(osa_last_error)")
+    abort "cannot query iTerm2 via AppleScript: $hint" 1
+  }
+}
+
+pf_2_binaries() {
+  command -v claude >/dev/null || abort "claude not on PATH" 1
+  CL_CLAUDE_PATH=$(command -v claude)
+  CL_CLAUDE_VERSION=$(claude --version 2>/dev/null) || abort "claude --version failed" 1
+  command -v osascript >/dev/null || abort "osascript missing" 1
+  command -v caffeinate >/dev/null || abort "caffeinate missing" 1
+  command -v jq >/dev/null || abort "jq missing — install with: brew install jq" 1
+  command -v swift >/dev/null || abort "swift missing — install Xcode CLI tools: xcode-select --install" 1
+  command -v pmset >/dev/null || abort "pmset missing" 1
+}
+
+pf_3_time_parsing() {
+  if [ -n "$ARG_AT" ] && [ -n "$ARG_IN" ]; then
+    abort "specify exactly one of --at or --in" 64
+  fi
+  if [ -z "$ARG_AT" ] && [ -z "$ARG_IN" ]; then
+    abort "must specify either --at or --in" 64
+  fi
+  if [ -n "$ARG_AT" ]; then
+    CL_TARGET_EPOCH=$(parse_at "$ARG_AT") || abort "invalid --at value: $ARG_AT (DST gap, past time, or unparseable)" 64
+  else
+    local secs
+    secs=$(parse_in "$ARG_IN") || abort "invalid --in value: $ARG_IN" 64
+    CL_TARGET_EPOCH=$(( $(date +%s) + secs ))
+  fi
+}
+
+pf_4_resume_target() {
+  if [ -z "$ARG_RESUME" ]; then return 0; fi
+  if ! [[ "$ARG_RESUME" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    abort "invalid --resume value: must be a UUID matching ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$" 64
+  fi
+  # Best-effort transcript existence check (slug = cwd with / and _ replaced by -)
+  local cwd_slug
+  cwd_slug=$(printf '%s' "$PWD" | sed -e 's|/|-|g' -e 's|_|-|g')
+  local transcript="$HOME/.claude/projects/-${cwd_slug#-}/${ARG_RESUME}.jsonl"
+  if [ -r "$transcript" ]; then
+    log_event "pf_4 resume transcript found: $transcript" 2>/dev/null || true
+  else
+    printf 'claude-later: warning: resume transcript not found at %s (will try anyway)\n' "$transcript" >&2
+  fi
+}
+
+pf_5_message_content() {
+  if [ -z "$ARG_MESSAGE" ]; then
+    abort "message is required (trailing positional argument)" 64
+  fi
+  # Reject embedded newlines (single-line only). Use awk for portability across
+  # bash 3.2 quirks with $'\n' inside grep patterns.
+  local nl_count
+  nl_count=$(printf '%s' "$ARG_MESSAGE" | awk 'END{print NR}')
+  if [ "$nl_count" -gt 1 ]; then
+    abort "message must be a single line (no embedded newlines)" 64
+  fi
+  # Reject other control characters (not newline since we already checked above,
+  # but still block tabs, escape, NUL, etc. — printable + space only).
+  if printf '%s' "$ARG_MESSAGE" | LC_ALL=C grep -q '[^[:print:]]'; then
+    abort "message contains non-printable characters" 64
+  fi
+}
+
+pf_6_silent_probe_secure_input() {
+  # Resolve $ITERM_SESSION_ID via the scripting dictionary as a read-only check
+  local uuid="${ITERM_SESSION_ID#*:}"
+  if ! osa_session_alive "$uuid"; then
+    local hint
+    hint=$(_osa_classify_error "$(osa_last_error)")
+    abort "iTerm2 scripting cannot resolve current session id (UUID=$uuid): $hint" 1
+  fi
+  # Secure Input check
+  if sec_input_engaged; then
+    abort "Secure Input is currently engaged (1Password unlock, lock screen, etc.). Wait for it to clear and try again." 1
+  fi
+}
+
+pf_7_visible_probe() {
+  # Intentionally removed: the visible probe wrote ": claude-later preflight ok"
+  # + newline into the pane. zsh ran it as a no-op, but the bytes lingered in
+  # the pty line-discipline buffer and were read as initial input by `claude`
+  # after `exec claude`, appearing as a prefix on the helper's typed message.
+  # pf_6's silent probe (osa_session_alive) already proves we can target this
+  # pane via iTerm2 scripting. The helper also sends Ctrl+U before typing as a
+  # defense-in-depth input-buffer clear.
+  return 0
+}
+
+pf_8_power_sleep() {
+  # Detect AC power
+  local power
+  power=$(pmset -g ps 2>/dev/null | head -1)
+  if printf '%s' "$power" | grep -qi "Battery Power"; then
+    if [ "$ARG_ALLOW_BATTERY" -eq 0 ]; then
+      abort "on battery power. Plug in, or pass --allow-battery to override." 1
+    fi
+    printf 'claude-later: warning: on battery and --allow-battery is set; the Mac may sleep.\n' >&2
+  fi
+}
+
+pf_9_state_file() {
+  state_dir_init || abort "cannot initialize ~/.claude-later/" 1
+  CL_ARMED_AT_EPOCH=$(date +%s)
+  CL_STATE_PATH=$(state_path_for "$ITERM_SESSION_ID" "$CL_ARMED_AT_EPOCH")
+  CL_ACTIVE_PTR=$(state_active_pointer_for "$ITERM_SESSION_ID")
+  local stale
+  stale=$(state_check_stale "$ITERM_SESSION_ID")
+  case "$stale" in
+    no_active|stale)
+      : # safe to arm
+      ;;
+    live*)
+      abort "another claude-later is already armed in this pane: $stale" 1
+      ;;
+  esac
+}
+
+pf_10_logs() {
+  CL_LOG_PATH="$CL_LOGS_ROOT/$(date +%Y-%m-%dT%H-%M-%S).log"
+  log_init "$CL_LOG_PATH" || abort "cannot open log file at $CL_LOG_PATH" 1
+  log_event "armed cwd=$PWD pane=$ITERM_SESSION_ID claude=$CL_CLAUDE_VERSION iterm=$CL_ITERM_VERSION target=$CL_TARGET_EPOCH"
+}
+
+pf_12_first_run_hygiene() {
+  local cwd_slug
+  cwd_slug=$(printf '%s' "$PWD" | sed -e 's|/|-|g' -e 's|_|-|g')
+  local proj_dir="$HOME/.claude/projects/-${cwd_slug#-}"
+  if [ ! -d "$proj_dir" ]; then
+    abort "first-run hygiene: \`claude\` has not run in this directory yet. Run \`claude\` once interactively first to clear any trust-folder/setup prompts. (looked for: $proj_dir)" 1
+  fi
+
+  # MCP auth check — see SPIKE.md spike #8
+  if [ "$ARG_SKIP_MCP_CHECK" -eq 1 ]; then
+    return 0
+  fi
+  local mcp_cache="$HOME/.claude/mcp-needs-auth-cache.json"
+  if [ -s "$mcp_cache" ]; then
+    local needs
+    needs=$(jq 'length' "$mcp_cache" 2>/dev/null || echo "0")
+    if [ "$needs" != "0" ] && [ "$needs" != "" ]; then
+      local servers
+      servers=$(jq -r 'keys | join(", ")' "$mcp_cache" 2>/dev/null)
+      abort "MCP servers need interactive auth: $servers. Run \`claude\` once interactively to complete authentication, then retry." 1
+    fi
+  fi
+}
+
+# ---- ARMED banner -----------------------------------------------------------
+
+print_armed_banner() {
+  local now
+  now=$(date +%s)
+  local delta=$((CL_TARGET_EPOCH - now))
+  printf '\n'
+  printf '\033[32m✓ claude-later ARMED\033[0m\n'
+  printf '  Fire time : %s\n' "$(wall_clock_for_epoch "$CL_TARGET_EPOCH")"
+  printf '              %s from now\n' "$(delta_human "$delta")"
+  printf '  Pane      : %s (UUID %s)\n' "$CL_PANE_ID" "${ITERM_SESSION_ID#*:}"
+  printf '  iTerm2    : %s\n' "$CL_ITERM_VERSION"
+  printf '  claude    : %s\n' "$CL_CLAUDE_VERSION"
+  if [ -n "$ARG_RESUME" ]; then
+    printf '  Resume    : %s\n' "$ARG_RESUME"
+  else
+    printf '  Resume    : (fresh session)\n'
+  fi
+  printf '  Message   : %q (%d chars)\n' "$ARG_MESSAGE" "${#ARG_MESSAGE}"
+  printf '  PID       : %d\n' "$$"
+  printf '  Log       : %s\n' "$CL_LOG_PATH"
+  printf '  State     : %s\n' "$CL_STATE_PATH"
+  if [ "$ARG_NO_CAFFEINATE" -eq 0 ]; then
+    printf '  Caffeinate: active\n'
+  else
+    printf '  Caffeinate: DISABLED (--no-caffeinate)\n'
+  fi
+  printf '\n'
+  printf '  \033[33mDO NOT close this iTerm2 window. Closing it cancels the job.\033[0m\n'
+  printf '\n'
+}
+
+# ---- Signal traps -----------------------------------------------------------
+
+# Pre-T-5s trap: script owns the notification.
+on_signal_pre() {
+  local sig=$1
+  CL_LAST_SIGNAL=$sig
+  log_event "signal received pre-T-5s sig=$sig"
+  state_mark "$CL_STATE_PATH" "killed" "signal=$sig" 2>/dev/null || true
+  state_active_clear "$CL_ACTIVE_PTR" 2>/dev/null || true
+  notify "claude-later: killed" "Script killed by SIG$sig before fire time"
+  exit 1
+}
+
+# Post-T-5s trap: helper owns the notification, we just signal it.
+on_signal_post() {
+  local sig=$1
+  CL_LAST_SIGNAL=$sig
+  log_event "signal received post-T-5s sig=$sig helper_pid=$CL_HELPER_PID"
+  state_mark "$CL_STATE_PATH" "killed" "signal=$sig" 2>/dev/null || true
+  state_active_clear "$CL_ACTIVE_PTR" 2>/dev/null || true
+  if [ -n "$CL_HELPER_PID" ]; then
+    kill -TERM "$CL_HELPER_PID" 2>/dev/null || true
+  fi
+  exit 1
+}
+
+install_pre_traps() {
+  trap 'on_signal_pre HUP' HUP
+  trap 'on_signal_pre INT' INT
+  trap 'on_signal_pre TERM' TERM
+}
+
+install_post_traps() {
+  trap 'on_signal_post HUP' HUP
+  trap 'on_signal_post INT' INT
+  trap 'on_signal_post TERM' TERM
+}
+
+# ---- Main pre-flight runner -------------------------------------------------
+
+run_preflight() {
+  pf_1_platform_terminal
+  pf_2_binaries
+  pf_3_time_parsing
+  pf_4_resume_target
+  pf_5_message_content
+  pf_12_first_run_hygiene
+  pf_8_power_sleep
+  pf_9_state_file
+  pf_10_logs
+  # State file written before probes so we have a place to log to.
+  state_write "$CL_STATE_PATH" \
+    "$ITERM_SESSION_ID" \
+    "$CL_ITERM_VERSION" \
+    "$CL_CLAUDE_VERSION" \
+    "$CL_PANE_ID" \
+    "$$" \
+    "$CL_TARGET_EPOCH" \
+    "$CL_ARMED_AT_EPOCH" \
+    "$ARG_RESUME" \
+    "$ARG_MESSAGE" \
+    "$CL_LOG_PATH" || abort "cannot write state file" 1
+  state_active_set "$CL_ACTIVE_PTR" "$CL_STATE_PATH"
+
+  pf_6_silent_probe_secure_input
+  pf_7_visible_probe
+}
+
+# ---- Sleep loop and fire ----------------------------------------------------
+
+sleep_until_fire() {
+  install_pre_traps
+  log_event "sleep loop start target=$CL_TARGET_EPOCH"
+  while :; do
+    local now
+    now=$(date +%s)
+    local remaining=$((CL_TARGET_EPOCH - now))
+    if [ "$remaining" -le 5 ]; then
+      log_event "sleep loop reached T-5s window"
+      break
+    fi
+    if polling_missed_window "$now" "$CL_TARGET_EPOCH" 60; then
+      log_event "missed window pre-helper-spawn"
+      state_mark "$CL_STATE_PATH" "missed_window" "asleep through fire window"
+      state_active_clear "$CL_ACTIVE_PTR"
+      notify "claude-later: missed_window" "System was asleep through the fire window"
+      exit 1
+    fi
+    local nap=$((remaining - 5))
+    if [ "$nap" -gt 30 ]; then nap=30; fi
+    sleep "$nap"
+  done
+}
+
+spawn_helper_and_exec() {
+  log_event "T-5s reached, spawning helper"
+  # Spawn the detached helper.
+  nohup "$CL_DIR/claude-later-helper" "$CL_STATE_PATH" </dev/null >>"$CL_LOG_PATH" 2>&1 &
+  CL_HELPER_PID=$!
+  disown
+  log_event "helper spawned pid=$CL_HELPER_PID"
+
+  # Switch trap behavior: post-T-5s, the helper owns notifications.
+  install_post_traps
+
+  # Wait until T-0, polling for missed-window.
+  while :; do
+    local now
+    now=$(date +%s)
+    local remaining=$((CL_TARGET_EPOCH - now))
+    if [ "$remaining" -le 0 ]; then break; fi
+    if polling_missed_window "$now" "$CL_TARGET_EPOCH" 60; then
+      log_event "missed window post-helper-spawn"
+      state_mark "$CL_STATE_PATH" "missed_window" "asleep through fire window after helper spawn"
+      state_active_clear "$CL_ACTIVE_PTR"
+      kill -TERM "$CL_HELPER_PID" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 1
+  done
+
+  # Final pre-fire checks at T-0.
+  log_event "T-0 final pre-fire checks"
+  local current_iterm
+  current_iterm=$(osa_iterm_version)
+  if [ "$current_iterm" != "$CL_ITERM_VERSION" ]; then
+    log_event "iterm version changed at T-0"
+    state_mark "$CL_STATE_PATH" "iterm_version_changed" "$CL_ITERM_VERSION -> $current_iterm"
+    kill -TERM "$CL_HELPER_PID" 2>/dev/null || true
+    exit 1
+  fi
+  local current_claude
+  current_claude=$(claude --version 2>/dev/null)
+  if [ "$current_claude" != "$CL_CLAUDE_VERSION" ]; then
+    log_event "claude version changed at T-0"
+    state_mark "$CL_STATE_PATH" "claude_version_changed" "$CL_CLAUDE_VERSION -> $current_claude"
+    kill -TERM "$CL_HELPER_PID" 2>/dev/null || true
+    exit 1
+  fi
+  if sec_input_engaged; then
+    log_event "Secure Input engaged at T-0"
+    state_mark "$CL_STATE_PATH" "secure_input_engaged" "engaged at T-0"
+    kill -TERM "$CL_HELPER_PID" 2>/dev/null || true
+    exit 1
+  fi
+  local uuid="${ITERM_SESSION_ID#*:}"
+  if ! osa_session_alive "$uuid"; then
+    log_event "session died at T-0"
+    state_mark "$CL_STATE_PATH" "session_died_pre_exec" "iterm session no longer resolves at T-0"
+    kill -TERM "$CL_HELPER_PID" 2>/dev/null || true
+    exit 1
+  fi
+
+  log_event "T-0 checks passed, exec'ing claude"
+  state_mark "$CL_STATE_PATH" "fired"
+
+  # exec replaces our process with claude. The helper is detached and survives.
+  if [ -n "$ARG_RESUME" ]; then
+    exec "$CL_CLAUDE_PATH" --resume "$ARG_RESUME"
+  else
+    exec "$CL_CLAUDE_PATH"
+  fi
+}
+
+# ---- Caffeinate re-exec -----------------------------------------------------
+
+reexec_under_caffeinate() {
+  if [ "$ARG_NO_CAFFEINATE" -eq 1 ]; then return 0; fi
+  if [ "${CL_UNDER_CAFFEINATE:-0}" = "1" ]; then return 0; fi
+  export CL_UNDER_CAFFEINATE=1
+  exec caffeinate -dimsu "$0" "$@"
+}
+
+# ---- Main -------------------------------------------------------------------
+
+main() {
+  parse_args "$@"
+  # Re-exec under caffeinate BEFORE pre-flights so state/.active is written
+  # exactly once (otherwise pf_9 sees its own prior-pass state as "live").
+  # Dry-runs skip caffeinate entirely.
+  if [ "$ARG_DRY_RUN" -ne 1 ]; then
+    reexec_under_caffeinate "$@"
+  fi
+  run_preflight
+  print_armed_banner
+
+  if [ "$ARG_DRY_RUN" -eq 1 ]; then
+    log_event "dry-run complete, exiting without scheduling"
+    state_active_clear "$CL_ACTIVE_PTR"
+    exit 0
+  fi
+
+  sleep_until_fire
+  spawn_helper_and_exec
+}
+
+main "$@"

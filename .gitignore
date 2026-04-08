@@ -1,0 +1,56 @@
+# ============================================
+# .gitignore — claude-later
+# ============================================
+
+# OS & Editor
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# AI assistant scratch & config (never committed to public repo)
+.claude/
+.cursor/
+.copilot/
+.windsurf/
+.codeium/
+.continue/
+.codex/
+.augment/
+.roo/
+.cline/
+.aider*
+.aiderignore
+.serena/
+.ai/
+CLAUDE.md
+AGENTS.md
+agents.md
+codex.md
+.cursorrules
+.cursorignore
+.continuerc.json
+.clinerules
+.clineignore
+.roomodes
+.github/copilot-instructions.md
+.mcp.json
+bootstrap.json
+
+# Working docs that are development-time only
+docs/brainstorms/
+docs/plans/
+
+# Development-time spike scratch & raw TUI captures.
+# The polished writeup lives in SPIKES.md at the repo root.
+spikes/
+
+# Worktrees, logs, temp
+.worktrees/
+*.log
+tmp/
