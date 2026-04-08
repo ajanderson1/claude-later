@@ -17,7 +17,7 @@
 
 # claude-later
 
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility)
 [![Terminal: iTerm2](https://img.shields.io/badge/terminal-iTerm2-8A2BE2.svg)](https://iterm2.com)
@@ -104,7 +104,7 @@ For broader compatibility plans, see [ROADMAP.md](ROADMAP.md).
 ```sh
 git clone https://github.com/ajanderson1/claude-later.git ~/GitHub/claude-later
 ln -s ~/GitHub/claude-later/claude-later /usr/local/bin/claude-later
-claude-later --version  # should print: claude-later 0.1.1
+claude-later --version  # should print: claude-later 0.2.0
 ```
 
 First time you run `claude-later`, macOS will prompt for permission for your shell's parent process (iTerm2 or the process invoking it) to control iTerm2 via AppleScript. Grant it — this is System Settings → Privacy & Security → Automation.
@@ -127,12 +127,59 @@ claude-later --at 06:30 "morning standup prep from today's commits"
 # Absolute date and time
 claude-later --at "2026-04-09 03:00" "run the nightly refactor"
 
+# Pass flags through to claude at fire time (model, teammate mode, etc.)
+claude-later --in 4h --claude-args "--model opus --teammate-mode tmux" "deep refactor"
+
 # Resume a specific prior session at fire time
-claude-later --in 30m --resume 7f3a4c12-... "continue where we left off"
+claude-later --in 30m --claude-args "--resume 7f3a4c12-0000-4000-8000-000000000000" "continue where we left off"
 
 # Dry-run: all pre-flights + ARMED banner, exit without scheduling
 claude-later --dry-run --in 1m "test"
 ```
+
+### Passing flags to `claude` at fire time (`--claude-args`)
+
+v0.2 introduced `--claude-args` as a transparent passthrough for any claude
+flag on an allowlist. This replaces v0.1's dedicated `--resume` flag —
+resume now lives inside `--claude-args`. Every sub-flag is validated at
+**arm time** against both an allowlist and a blocklist, with explicit
+error messages.
+
+```sh
+# Model selection
+claude-later --in 1h --claude-args "--model opus" "..."
+
+# Teammate mode (for users whose cc wrapper uses --teammate-mode tmux)
+claude-later --in 1h --claude-args "--teammate-mode tmux" "..."
+
+# Multiple flags
+claude-later --in 1h --claude-args "--teammate-mode tmux --model opus --effort high" "..."
+
+# Session resume (rate-limit recovery)
+claude-later --at 14:05 --claude-args "--resume 7f3a4c12-0000-4000-8000-000000000000" "continue"
+```
+
+**Allowlist** (only these sub-flags may appear inside `--claude-args`):
+`--resume` / `-r`, `--continue` / `-c`, `--model`, `--teammate-mode`,
+`--agent`, `--effort`, `--permission-mode`, `--name` / `-n`,
+`--append-system-prompt`, `--system-prompt`, `--fork-session`, `--add-dir`,
+`--mcp-config`, `--settings`.
+
+**Blocklist** (hard reject with a specific reason):
+`-p` / `--print` (headless, defeats the purpose), `-h` / `--help` and
+`-v` / `--version` (exit immediately), `--bare` (skips CLAUDE.md and
+hooks), `--dangerously-skip-permissions`, `-d` / `--debug` / `--debug-file`
+(breaks TUI rendering), `-w` / `--worktree` (changes cwd at fire time and
+violates the first-run hygiene pre-flight), `--session-id` (fixed session
+IDs conflict with fresh-session assumptions).
+
+**Limitations**:
+- Word-splitting is whitespace-only. No shell quoting is honored inside
+  the `--claude-args` string. Single and double quote characters are
+  rejected at pre-flight to prevent silent mis-parsing.
+- No flag allowed by claude outside the allowlist is permitted. If you
+  need a flag that isn't on the list, open an issue — adding flags is
+  cheap.
 
 ### Prompt from a variable
 
@@ -157,10 +204,10 @@ The most compelling real-world use case. Claude Code's 5-hour session limit hard
 
 ```sh
 # Scenario: hit the limit at 10am, reset at 2pm, session UUID printed by claude
-claude-later --at 14:05 --resume 7f3a4c12-... "continue where we left off"
+claude-later --at 14:05 --claude-args "--resume 7f3a4c12-0000-4000-8000-000000000000" "continue where we left off"
 ```
 
-At 14:05 the script fires a fresh `claude --resume 7f3a4c12-...` in your pane and types the prompt. Because it's a new process, the rate-limit counter is already reset at the provider level — no state-resurrection shenanigans.
+At 14:05 the script fires a fresh `claude --resume <uuid>` in your pane and types the prompt. Because it's a new process, the rate-limit counter is already reset at the provider level — no state-resurrection shenanigans. The resume UUID is validated against the UUID regex at arm time and the transcript file is checked for existence, so typos are caught loudly before you walk away.
 
 ## Options
 
@@ -168,7 +215,7 @@ At 14:05 the script fires a fresh `claude --resume 7f3a4c12-...` in your pane an
 | ----------------------- | ------------------------------------------------------------------------------------------------------ |
 | `--at TIME`             | Absolute: `HH:MM`, `HH:MM:SS`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`. Rolls to tomorrow if past.   |
 | `--in DURATION`         | Relative: `30s`, `5m`, `4h`, `2h30m`, `1d12h`, etc.                                                    |
-| `--resume UUID`         | Resume an existing session UUID instead of starting fresh.                                             |
+| `--claude-args "..."`   | Whitespace-separated passthrough of flags to `claude` at fire time. See the dedicated section above.   |
 | `--dry-run`             | Run pre-flights + ARMED banner, then exit without scheduling.                                          |
 | `--no-caffeinate`       | Skip the auto-re-exec under `caffeinate -dimsu`. Use only if you know the Mac will stay awake.         |
 | `--allow-battery`       | Allow arming on battery power. Script warns but proceeds.                                              |
@@ -186,7 +233,7 @@ Every pre-flight runs the moment you invoke the command. The script aborts loudl
 3. `$ITERM_SESSION_ID` present and correctly formatted
 4. Required binaries: `claude`, `osascript`, `caffeinate`, `jq`, `swift`, `pmset`
 5. Time parses, is in the future, and is not inside a DST gap
-6. `--resume UUID` passes regex + the referenced transcript exists (best-effort)
+6. `--claude-args` sub-flags pass the allowlist/blocklist, quote characters rejected, and if `--resume UUID` is present the UUID is validated and the transcript file checked
 7. Message is non-empty, single-line, printable only
 8. iTerm2 scripting can reach the current session (with classified error hints: automation denied / iTerm2 quit / session closed)
 9. Secure Input is not engaged (1Password unlock, lock screen, etc.)

@@ -14,18 +14,23 @@ CL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$CL_DIR/lib/state.sh"
 . "$CL_DIR/lib/osa.sh"
 
-CL_VERSION="0.1.1"
+CL_VERSION="0.2.0"
 
 # Parsed args
 ARG_AT=""
 ARG_IN=""
-ARG_RESUME=""
+ARG_CLAUDE_ARGS=""            # Raw whitespace-separated passthrough string
 ARG_DRY_RUN=0
 ARG_NO_CAFFEINATE=0
 ARG_ALLOW_BATTERY=0
 ARG_LOG_SNAPSHOTS=0
 ARG_SKIP_MCP_CHECK=0
 ARG_MESSAGE=""
+
+# Populated during pf_4_claude_args validation. Array of sub-arg tokens that
+# will be exec'd verbatim into claude at fire time:
+#   claude "${CL_CLAUDE_ARGS_ARR[@]}"
+CL_CLAUDE_ARGS_ARR=()
 
 # Captured during pre-flight
 CL_CLAUDE_PATH=""
@@ -57,14 +62,36 @@ REQUIRED (exactly one)
   --in DURATION   Relative time. Accepts: 30s, 5m, 4h, 2h30m, 1d12h, etc.
 
 OPTIONS
-  --resume UUID         Fire `claude --resume <uuid>` instead of a fresh session.
+  --claude-args "..."   Transparent passthrough of arguments to the claude
+                        binary at fire time. Whitespace-separated; no quoting
+                        inside. Validated against an allowlist at arm time.
+                        Example: --claude-args "--teammate-mode tmux --model opus"
+                        Example: --claude-args "--resume 7f3a..." (rate-limit recovery)
   --dry-run             Run all pre-flight checks (including the visible probe)
                         and print the ARMED banner, then exit without scheduling.
   --no-caffeinate       Skip the auto-re-exec under `caffeinate -dimsu`.
   --allow-battery       Override the on-battery abort.
   --log-pane-snapshots  Capture full pane content snapshots into the log file.
+  --skip-mcp-check      Bypass the MCP auth-pending pre-flight.
   --help                Show this message.
   --version             Print version and exit.
+
+CLAUDE-ARGS ALLOWLIST
+  Only these sub-flags may appear inside --claude-args. Passing anything
+  outside the allowlist (or inside the blocklist) is rejected at arm time.
+  Allowlist:
+    --resume / -r, --continue / -c, --model, --teammate-mode, --agent,
+    --effort, --permission-mode, --name / -n, --append-system-prompt,
+    --system-prompt, --fork-session, --add-dir, --mcp-config, --settings
+  Blocklist (always rejected with explicit reason):
+    -p / --print         (headless, defeats claude-later)
+    -h / --help          (exits immediately)
+    -v / --version       (exits immediately)
+    --bare               (disables CLAUDE.md, hooks — surprising at fire time)
+    --dangerously-skip-permissions, --allow-dangerously-skip-permissions
+    -d / --debug, --debug-file  (TUI-breaking output)
+    -w / --worktree      (changes cwd, violates first-run hygiene pre-flight)
+    --session-id         (fixed session ID)
 
 REQUIREMENTS
   - macOS only.
@@ -101,7 +128,7 @@ parse_args() {
       --version) printf 'claude-later %s\n' "$CL_VERSION"; exit 0;;
       --at)      shift; ARG_AT=${1:-};;
       --in)      shift; ARG_IN=${1:-};;
-      --resume)  shift; ARG_RESUME=${1:-};;
+      --claude-args) shift; ARG_CLAUDE_ARGS=${1:-};;
       --dry-run) ARG_DRY_RUN=1;;
       --no-caffeinate) ARG_NO_CAFFEINATE=1;;
       --allow-battery) ARG_ALLOW_BATTERY=1;;
@@ -164,20 +191,154 @@ pf_3_time_parsing() {
   fi
 }
 
-pf_4_resume_target() {
-  if [ -z "$ARG_RESUME" ]; then return 0; fi
-  if ! [[ "$ARG_RESUME" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-    abort "invalid --resume value: must be a UUID matching ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$" 64
+# pf_4_claude_args — validate --claude-args passthrough string.
+#
+# Enforces all three of our safety rails:
+#   1. No multi-line input, no non-printable characters, no shell quote
+#      characters (single or double). These could allow argument smuggling
+#      into the exec'd claude process.
+#   2. Allowlist: every sub-flag must be in CL_CLAUDE_ARG_ALLOW.
+#   3. Blocklist: every sub-flag must NOT be in CL_CLAUDE_ARG_BLOCK.
+#      (The blocklist exists so we can give a specific, actionable error
+#      reason for flags that are obviously wrong — not just "not in the
+#      allowlist". E.g. `-p` gets "headless mode is unsupported" instead of
+#      "unknown flag".)
+#
+# For `--resume VALUE` specifically, additionally validate VALUE against the
+# UUID regex and check the transcript file exists. This is the one exception
+# to pure passthrough — resume is our headline workflow, and catching a
+# typo'd UUID at arm time (rather than a tui_not_ready tombstone at fire
+# time) is worth the slight abstraction leak. See ROADMAP / CHANGELOG.
+#
+# On success, populates the CL_CLAUDE_ARGS_ARR global array with the
+# validated tokens. On failure, aborts with a specific error message.
+pf_4_claude_args() {
+  CL_CLAUDE_ARGS_ARR=()
+  if [ -z "$ARG_CLAUDE_ARGS" ]; then return 0; fi
+
+  # Rail 1: input sanitation
+  local nl_count
+  nl_count=$(printf '%s' "$ARG_CLAUDE_ARGS" | awk 'END{print NR}')
+  if [ "$nl_count" -gt 1 ]; then
+    abort "--claude-args must be a single line (no embedded newlines)" 64
   fi
-  # Best-effort transcript existence check (slug = cwd with / and _ replaced by -)
-  local cwd_slug
-  cwd_slug=$(printf '%s' "$PWD" | sed -e 's|/|-|g' -e 's|_|-|g')
-  local transcript="$HOME/.claude/projects/-${cwd_slug#-}/${ARG_RESUME}.jsonl"
-  if [ -r "$transcript" ]; then
-    log_event "pf_4 resume transcript found: $transcript" 2>/dev/null || true
-  else
-    printf 'claude-later: warning: resume transcript not found at %s (will try anyway)\n' "$transcript" >&2
+  if printf '%s' "$ARG_CLAUDE_ARGS" | LC_ALL=C grep -q '[^[:print:]]'; then
+    abort "--claude-args contains non-printable characters" 64
   fi
+  case "$ARG_CLAUDE_ARGS" in
+    *\'*) abort "--claude-args must not contain single quotes (word-splitting is whitespace-only; quoted values are not honored)" 64 ;;
+    *\"*) abort "--claude-args must not contain double quotes (word-splitting is whitespace-only; quoted values are not honored)" 64 ;;
+  esac
+
+  # Word-split into a bash array. IFS default is fine — whitespace only.
+  # shellcheck disable=SC2206  # intentional word-splitting
+  local tokens=($ARG_CLAUDE_ARGS)
+
+  # Allowlist: sub-flags permitted. Each entry: the flag name (canonical or
+  # short form). `takes_value` means the next token is the flag's argument
+  # and should be consumed together.
+  #
+  # We use a pair of parallel case statements rather than associative arrays
+  # because bash 3.2 (macOS system bash) doesn't have associative arrays.
+  _is_allowed_flag() {
+    case "$1" in
+      --resume|-r) return 0 ;;
+      --continue|-c) return 0 ;;
+      --model) return 0 ;;
+      --teammate-mode) return 0 ;;
+      --agent) return 0 ;;
+      --effort) return 0 ;;
+      --permission-mode) return 0 ;;
+      --name|-n) return 0 ;;
+      --append-system-prompt) return 0 ;;
+      --system-prompt) return 0 ;;
+      --fork-session) return 0 ;;
+      --add-dir) return 0 ;;
+      --mcp-config) return 0 ;;
+      --settings) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  _flag_takes_value() {
+    case "$1" in
+      --continue|-c|--fork-session) return 1 ;;  # boolean, no value
+      --resume|-r|--model|--teammate-mode|--agent|--effort|--permission-mode|\
+      --name|-n|--append-system-prompt|--system-prompt|--add-dir|--mcp-config|\
+      --settings) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  _blocked_flag_reason() {
+    case "$1" in
+      -p|--print) printf 'headless mode defeats the whole point of claude-later' ;;
+      -h|--help) printf '--help exits before any TUI is drawn' ;;
+      -v|--version) printf '--version exits before any TUI is drawn' ;;
+      --bare) printf 'skips CLAUDE.md, hooks, plugins — surprising behaviour at fire time' ;;
+      --dangerously-skip-permissions|--allow-dangerously-skip-permissions)
+        printf 'security-sensitive; must be explicit at arm time, not via passthrough' ;;
+      -d|--debug|--debug-file) printf 'debug output breaks TUI rendering' ;;
+      -w|--worktree) printf 'creates a new worktree, changes cwd at fire time and violates the first-run hygiene pre-flight' ;;
+      --session-id) printf 'fixed session IDs conflict with fresh-session assumptions' ;;
+      *) printf '' ;;
+    esac
+  }
+
+  # State machine: walk tokens, every flag must be allowed and not blocked,
+  # flags that take values consume the next token.
+  local i=0
+  local n=${#tokens[@]}
+  while [ "$i" -lt "$n" ]; do
+    local tok=${tokens[$i]}
+    case "$tok" in
+      -*)
+        # Check blocklist FIRST — blocked flags give a more specific error
+        # than "not in allowlist".
+        local reason
+        reason=$(_blocked_flag_reason "$tok")
+        if [ -n "$reason" ]; then
+          abort "--claude-args: blocked sub-flag '$tok': $reason" 64
+        fi
+        # Check allowlist
+        if ! _is_allowed_flag "$tok"; then
+          abort "--claude-args: sub-flag '$tok' is not in the allowlist (see --help for the full list)" 64
+        fi
+        CL_CLAUDE_ARGS_ARR+=("$tok")
+        # Does it consume the next token?
+        if _flag_takes_value "$tok"; then
+          i=$((i + 1))
+          if [ "$i" -ge "$n" ]; then
+            abort "--claude-args: sub-flag '$tok' requires a value but none was provided" 64
+          fi
+          local val=${tokens[$i]}
+          # The value token must not itself start with `-` — that would be
+          # the user forgetting the value and the next flag getting
+          # consumed. This IS possible for flags whose value is a flag-like
+          # string (rare) but we prefer false-positives here over silent
+          # mis-parsing.
+          case "$val" in
+            -*) abort "--claude-args: sub-flag '$tok' requires a value; got another flag-like token '$val'" 64 ;;
+          esac
+          # Special-case resume: validate UUID regex + check transcript
+          if [ "$tok" = "--resume" ] || [ "$tok" = "-r" ]; then
+            if ! [[ "$val" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+              abort "--claude-args: --resume value must be a UUID (got '$val')" 64
+            fi
+            local cwd_slug
+            cwd_slug=$(printf '%s' "$PWD" | sed -e 's|/|-|g' -e 's|_|-|g')
+            local transcript="$HOME/.claude/projects/-${cwd_slug#-}/${val}.jsonl"
+            if [ ! -r "$transcript" ]; then
+              printf 'claude-later: warning: --resume transcript not found at %s (will try anyway)\n' "$transcript" >&2
+            fi
+          fi
+          CL_CLAUDE_ARGS_ARR+=("$val")
+        fi
+        ;;
+      *)
+        abort "--claude-args: unexpected non-flag token '$tok' (all tokens must be flags or flag values)" 64
+        ;;
+    esac
+    i=$((i + 1))
+  done
 }
 
 pf_5_message_content() {
@@ -301,10 +462,15 @@ print_armed_banner() {
   printf '  Pane      : %s (UUID %s)\n' "$CL_PANE_ID" "${ITERM_SESSION_ID#*:}"
   printf '  iTerm2    : %s\n' "$CL_ITERM_VERSION"
   printf '  claude    : %s\n' "$CL_CLAUDE_VERSION"
-  if [ -n "$ARG_RESUME" ]; then
-    printf '  Resume    : %s\n' "$ARG_RESUME"
+  if [ ${#CL_CLAUDE_ARGS_ARR[@]} -gt 0 ]; then
+    printf '  Invocation: claude'
+    local arg
+    for arg in "${CL_CLAUDE_ARGS_ARR[@]}"; do
+      printf ' %q' "$arg"
+    done
+    printf '\n'
   else
-    printf '  Resume    : (fresh session)\n'
+    printf '  Invocation: claude (no passthrough args)\n'
   fi
   printf '  Message   : %q (%d chars)\n' "$ARG_MESSAGE" "${#ARG_MESSAGE}"
   printf '  PID       : %d\n' "$$"
@@ -364,12 +530,25 @@ run_preflight() {
   pf_1_platform_terminal
   pf_2_binaries
   pf_3_time_parsing
-  pf_4_resume_target
+  pf_4_claude_args
   pf_5_message_content
   pf_12_first_run_hygiene
   pf_8_power_sleep
   pf_9_state_file
   pf_10_logs
+
+  # Build a JSON array of the validated claude-args tokens for the state
+  # file. Pass through jq -R -s -c 'split("\u0000")[:-1]' with NUL separator
+  # to handle any whitespace-containing tokens correctly. (Since we reject
+  # quotes, current tokens can't contain whitespace, but this is future-proof.)
+  local claude_args_json
+  if [ ${#CL_CLAUDE_ARGS_ARR[@]} -eq 0 ]; then
+    claude_args_json='[]'
+  else
+    claude_args_json=$(printf '%s\0' "${CL_CLAUDE_ARGS_ARR[@]}" \
+      | jq -R -s -c 'split("\u0000")[:-1]') || abort "cannot encode claude_args as JSON" 1
+  fi
+
   # State file written before probes so we have a place to log to.
   state_write "$CL_STATE_PATH" \
     "$ITERM_SESSION_ID" \
@@ -379,7 +558,7 @@ run_preflight() {
     "$$" \
     "$CL_TARGET_EPOCH" \
     "$CL_ARMED_AT_EPOCH" \
-    "$ARG_RESUME" \
+    "$claude_args_json" \
     "$ARG_MESSAGE" \
     "$CL_LOG_PATH" || abort "cannot write state file" 1
   state_active_set "$CL_ACTIVE_PTR" "$CL_STATE_PATH"
@@ -477,8 +656,9 @@ spawn_helper_and_exec() {
   state_mark "$CL_STATE_PATH" "fired"
 
   # exec replaces our process with claude. The helper is detached and survives.
-  if [ -n "$ARG_RESUME" ]; then
-    exec "$CL_CLAUDE_PATH" --resume "$ARG_RESUME"
+  # CL_CLAUDE_ARGS_ARR is the validated passthrough array from pf_4.
+  if [ ${#CL_CLAUDE_ARGS_ARR[@]} -gt 0 ]; then
+    exec "$CL_CLAUDE_PATH" "${CL_CLAUDE_ARGS_ARR[@]}"
   else
     exec "$CL_CLAUDE_PATH"
   fi

@@ -31,7 +31,7 @@ assert_eq "$ptr" "$expected_ptr" "state_active_pointer_for"
 
 echo
 echo "=== state_write + state_read ==="
-state_write "$path" "$sid" "3.5.0" "2.1.92" "w3t0p1" 12345 1712554800 1712528280 "" "review the open PRs" "$CL_LOGS_ROOT/test.log"
+state_write "$path" "$sid" "3.5.0" "2.1.92" "w3t0p1" 12345 1712554800 1712528280 '[]' "review the open PRs" "$CL_LOGS_ROOT/test.log"
 assert_zero $? "state_write succeeds"
 
 # jq parses it
@@ -47,14 +47,30 @@ assert_eq "$(state_read "$path" .claude_version)" "2.1.92" "read claude_version"
 assert_eq "$(state_read "$path" .target_epoch)" "1712554800" "read target_epoch"
 assert_eq "$(state_read "$path" .message)" "review the open PRs" "read message"
 assert_eq "$(state_read "$path" .status)" "armed" "initial status is armed"
-assert_eq "$(state_read "$path" .resume_id)" "null" "resume_id is null when empty"
+assert_eq "$(state_read "$path" '.schema_version')" "2" "schema_version is 2"
+assert_eq "$(state_read "$path" '.claude_args | length')" "0" "claude_args empty by default"
 assert_eq "$(state_read "$path" .helper_pid)" "null" "helper_pid is null at write"
+
+# v0.2: resume_id field no longer exists
+assert_eq "$(state_read "$path" '.resume_id // "missing"')" "missing" "resume_id field removed in schema v2"
+
+echo
+echo "=== state_write with populated claude_args ==="
+args_path=$(state_path_for "$sid" 1712554850)
+state_write "$args_path" "$sid" "3.5.0" "2.1.92" "w3t0p1" 12346 1712554800 1712528280 \
+  '["--teammate-mode","tmux","--resume","7f3a4c12-0000-4000-8000-000000000000"]' \
+  "test message" "$CL_LOGS_ROOT/test.log"
+assert_zero $? "state_write with populated claude_args succeeds"
+assert_eq "$(state_read "$args_path" '.claude_args | length')" "4" "claude_args has 4 tokens"
+assert_eq "$(state_read "$args_path" '.claude_args[0]')" "--teammate-mode" "claude_args[0] preserved"
+assert_eq "$(state_read "$args_path" '.claude_args[2]')" "--resume" "claude_args[2] preserved"
+assert_eq "$(state_read "$args_path" '.claude_args[3]')" "7f3a4c12-0000-4000-8000-000000000000" "claude_args[3] UUID preserved"
 
 echo
 echo "=== state_write with shell-injection-y message ==="
 nasty_msg='hello "world" $foo `backtick` \backslash; rm -rf ~'
 nasty_path=$(state_path_for "$sid" 1712554900)
-state_write "$nasty_path" "$sid" "3.5.0" "2.1.92" "w3t0p1" 12345 1712554800 1712528280 "" "$nasty_msg" "$CL_LOGS_ROOT/test.log"
+state_write "$nasty_path" "$sid" "3.5.0" "2.1.92" "w3t0p1" 12345 1712554800 1712528280 '[]' "$nasty_msg" "$CL_LOGS_ROOT/test.log"
 assert_zero $? "state_write with metacharacters succeeds"
 
 # Round-trip through jq must be byte-for-byte identical
@@ -97,7 +113,7 @@ assert_eq "$r" "no_active" "stale check: no_active when no pointer"
 
 # Pointer exists but points to file with dead PID (use 99999 — almost certainly dead)
 fake_path=$(state_path_for "$sid" 1712554999)
-state_write "$fake_path" "$sid" "3.5.0" "2.1.92" "w3t0p1" 99999 1712554800 1712528280 "" "old message" "$CL_LOGS_ROOT/old.log"
+state_write "$fake_path" "$sid" "3.5.0" "2.1.92" "w3t0p1" 99999 1712554800 1712528280 '[]' "old message" "$CL_LOGS_ROOT/old.log"
 state_active_set "$ptr" "$fake_path"
 r=$(state_check_stale "$sid")
 assert_eq "$r" "stale" "stale check: dead PID -> stale"

@@ -48,8 +48,14 @@ state_active_pointer_for() {
 
 # state_write "$path" "$iterm_session_id" "$iterm_version" "$claude_version" \
 #             "$pane_id" "$script_pid" "$target_epoch" "$armed_at_epoch" \
-#             "$resume_id" "$message" "$log_path"
-# Build a fresh state file via jq -n. Atomic write via mktemp + mv.
+#             "$claude_args_json" "$message" "$log_path"
+#
+# Schema v2 (claude-later >= 0.2.0):
+#   The resume_id field is removed. Resume is now handled via the generic
+#   claude_args passthrough, which stores a JSON array of sub-args to be
+#   exec'd verbatim at fire time: ["--teammate-mode", "tmux", "--resume",
+#   "<uuid>"]. claude_args_json MUST be a valid JSON array string (pass "[]"
+#   for an empty array).
 state_write() {
   local path=$1
   local sid=$2
@@ -59,7 +65,7 @@ state_write() {
   local pid=$6
   local target=$7
   local armed=$8
-  local resume=$9
+  local claude_args_json=$9
   local msg=${10}
   local log=${11}
   local tmp
@@ -72,11 +78,11 @@ state_write() {
     --argjson pid "$pid" \
     --argjson target "$target" \
     --argjson armed "$armed" \
-    --arg resume "$resume" \
+    --argjson cargs "$claude_args_json" \
     --arg msg "$msg" \
     --arg log "$log" \
     '{
-      schema_version: 1,
+      schema_version: 2,
       iterm_session_id: $sid,
       iterm_version: $iv,
       claude_version: $cv,
@@ -85,7 +91,7 @@ state_write() {
       helper_pid: null,
       target_epoch: $target,
       armed_at_epoch: $armed,
-      resume_id: (if $resume == "" then null else $resume end),
+      claude_args: $cargs,
       message: $msg,
       log_path: $log,
       status: "armed",

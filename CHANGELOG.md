@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-04-08
+
+**Breaking:** the top-level `--resume UUID` flag is removed. Resume now lives
+inside the new `--claude-args` transparent passthrough.
+
+### Changed (BREAKING)
+
+- **`--resume UUID` removed as a top-level flag.** Pass it through
+  `--claude-args` instead:
+  ```sh
+  # Old (v0.1.x):
+  claude-later --in 30m --resume 7f3a4c12-... "continue"
+  # New (v0.2.0):
+  claude-later --in 30m --claude-args "--resume 7f3a4c12-0000-4000-8000-000000000000" "continue"
+  ```
+  The resume UUID is still validated against the UUID regex at arm time
+  (with transcript-existence best-effort check), just inside the
+  `--claude-args` validator instead of a dedicated pre-flight.
+- **State file schema bumped to v2.** `resume_id` field removed;
+  `claude_args` JSON array added. State files are per-run ephemeral and
+  don't persist across arms, so no migration is needed for existing users.
+
+### Added
+
+- **`--claude-args "..."`** transparent passthrough for claude sub-flags.
+  Whitespace-separated string, validated at arm time against both an
+  allowlist and a blocklist, with explicit error messages for every
+  rejection reason.
+  - **Allowlist**: `--resume`/`-r`, `--continue`/`-c`, `--model`,
+    `--teammate-mode`, `--agent`, `--effort`, `--permission-mode`,
+    `--name`/`-n`, `--append-system-prompt`, `--system-prompt`,
+    `--fork-session`, `--add-dir`, `--mcp-config`, `--settings`.
+  - **Blocklist** (with explicit rejection reason): `-p`/`--print`,
+    `-h`/`--help`, `-v`/`--version`, `--bare`,
+    `--dangerously-skip-permissions`, `-d`/`--debug`/`--debug-file`,
+    `-w`/`--worktree`, `--session-id`.
+  - Single and double quote characters inside `--claude-args` are rejected
+    (word-splitting is whitespace-only; quoted values would silently
+    mis-parse).
+- **Banner now shows `Invocation: claude <args>`** — the effective claude
+  command line as it will be exec'd at fire time. Replaces the
+  `Resume: (fresh session) / Resume: <uuid>` line.
+- **18 new failure-mode tests** in `test_failure_modes.sh` covering the
+  `--claude-args` allowlist/blocklist/sanitation.
+- **7 new state-file tests** in `test_state_file.sh` covering schema v2
+  (`schema_version: 2`, `claude_args` array, removal of `resume_id`).
+
+### Test count
+
+- Unit: 120 → 143
+- Integration: 9 (unchanged)
+- Total: 129 → 152
+
+### Migration notes
+
+If you have shell aliases or scripts that invoke `claude-later --resume
+UUID`, rewrite them as `claude-later --claude-args "--resume UUID"`. The
+error message at arm time is specific: running the old syntax gives
+"unknown flag: --resume" so the breakage is loud and obvious.
+
+For users whose `cc` function wraps claude with `--teammate-mode tmux`,
+a convenience wrapper is easy:
+
+```sh
+cc_later() {
+  claude-later --claude-args "--teammate-mode tmux" "$@"
+}
+```
+
 ## [0.1.1] — 2026-04-08
 
 Bugfix release. One critical fix in the helper's load-bearing readiness signal.
@@ -100,6 +169,7 @@ First public release. Pre-1.0: the CLI surface is usable but may change.
 - `docs/plans/` and `docs/brainstorms/` (gitignored) contain the brainstorm
   and implementation plan that preceded the code.
 
-[Unreleased]: https://github.com/ajanderson1/claude-later/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ajanderson1/claude-later/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ajanderson1/claude-later/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/ajanderson1/claude-later/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ajanderson1/claude-later/releases/tag/v0.1.0

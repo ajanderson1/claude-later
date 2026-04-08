@@ -100,19 +100,93 @@ printf '\n=== both --at and --in rejected ===\n'
 assert_fails_with "both time flags rejected" "specify exactly one of --at or --in" \
   "$CLAUDE_LATER" --dry-run --at "23:59" --in "1m" --skip-mcp-check "x"
 
-printf '\n=== resume UUID validation ===\n'
+printf '\n=== --resume flag is removed in v0.2 (must go through --claude-args) ===\n'
 
-# Shell injection attempt via --resume
-assert_fails_with "resume shell injection rejected" "invalid --resume value" \
-  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --resume '$(whoami)' "x"
+assert_fails_with "--resume as top-level flag is rejected" "unknown flag" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --resume "7f3a4c12-0000-4000-8000-000000000000" "x"
 
-# Path traversal attempt
-assert_fails_with "resume path traversal rejected" "invalid --resume value" \
-  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --resume '../../etc/passwd' "x"
+printf '\n=== --claude-args validation ===\n'
 
-# Non-UUID string
-assert_fails_with "resume non-UUID rejected" "invalid --resume value" \
-  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --resume 'not-a-uuid' "x"
+# Word-splitting defensive checks
+assert_fails_with "--claude-args with single quote rejected" "single quotes" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--model 'opus'" "x"
+
+assert_fails_with "--claude-args with double quote rejected" "double quotes" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args '--model "opus"' "x"
+
+# Blocklist
+assert_fails_with "--claude-args -p is blocked" "headless" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "-p" "x"
+
+assert_fails_with "--claude-args --print is blocked" "headless" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--print" "x"
+
+assert_fails_with "--claude-args --debug is blocked" "debug" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--debug" "x"
+
+assert_fails_with "--claude-args --worktree is blocked" "worktree" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--worktree myname" "x"
+
+assert_fails_with "--claude-args --dangerously-skip-permissions is blocked" "security-sensitive" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--dangerously-skip-permissions" "x"
+
+# Not in allowlist (and not in blocklist either) — should say "not in allowlist"
+assert_fails_with "--claude-args unknown flag is rejected" "not in the allowlist" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--not-a-real-flag" "x"
+
+# Non-flag token (positional) rejected
+assert_fails_with "--claude-args positional token is rejected" "unexpected non-flag token" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "hello" "x"
+
+# Allowed flag missing a value
+assert_fails_with "--claude-args --model with no value rejected" "requires a value" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--model" "x"
+
+# Allowed flag followed by another flag-looking thing where value was expected
+assert_fails_with "--claude-args --model --resume is rejected" "flag-like token" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--model --resume 7f3a4c12-0000-4000-8000-000000000000" "x"
+
+printf '\n=== --claude-args --resume UUID safety belt ===\n'
+
+# Resume sub-flag still validates the UUID even inside --claude-args
+assert_fails_with "--claude-args --resume non-UUID rejected" "--resume value must be a UUID" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume garbage" "x"
+
+assert_fails_with "--claude-args --resume shell-injection attempt rejected" "single quotes" \
+  "$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--resume '\$(whoami)'" "x"
+
+printf '\n=== --claude-args allowlist passes happy cases ===\n'
+
+# Valid cases must NOT abort. We use --dry-run and grep for the ARMED banner.
+output=$("$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--teammate-mode tmux" "x" 2>&1 || true)
+if printf '%s' "$output" | grep -q 'claude-later ARMED'; then
+  printf '  PASS: --claude-args "--teammate-mode tmux" accepted\n'
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: --claude-args "--teammate-mode tmux" was rejected\n'
+  printf '%s\n' "$output" | head -5 | sed 's/^/      /'
+  FAIL=$((FAIL + 1))
+fi
+
+output=$("$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--model opus" "x" 2>&1 || true)
+if printf '%s' "$output" | grep -q 'claude-later ARMED'; then
+  printf '  PASS: --claude-args "--model opus" accepted\n'
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: --claude-args "--model opus" was rejected\n'
+  printf '%s\n' "$output" | head -5 | sed 's/^/      /'
+  FAIL=$((FAIL + 1))
+fi
+
+output=$("$CLAUDE_LATER" --dry-run --in 1m --skip-mcp-check --claude-args "--teammate-mode tmux --model opus" "x" 2>&1 || true)
+if printf '%s' "$output" | grep -q 'claude-later ARMED'; then
+  printf '  PASS: --claude-args with multiple flags accepted\n'
+  PASS=$((PASS + 1))
+else
+  printf '  FAIL: --claude-args with multiple flags was rejected\n'
+  printf '%s\n' "$output" | head -5 | sed 's/^/      /'
+  FAIL=$((FAIL + 1))
+fi
 
 printf '\n=== message content validation ===\n'
 

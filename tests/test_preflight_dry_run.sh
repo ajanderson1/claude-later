@@ -30,7 +30,7 @@ assert_fails_with() {
     printf '  FAIL: %s\n    expected non-zero exit, got 0\n    output: %s\n' "$label" "$out"
     return
   fi
-  if printf '%s' "$out" | grep -qE "$expected_pattern"; then
+  if printf '%s' "$out" | grep -qE -- "$expected_pattern"; then
     CL_TEST_PASS=$((CL_TEST_PASS + 1))
     printf '  PASS: %s\n' "$label"
   else
@@ -73,10 +73,11 @@ assert_fails_with "--at past" "invalid --at" --dry-run --at "2020-01-01 03:00:00
 assert_fails_with "--at unparseable" "invalid --at" --dry-run --at "yesterday at 3" "msg"
 
 echo
-echo "=== --resume validation ==="
-assert_fails_with "--resume shell injection" "invalid --resume" --dry-run --in 5s --resume "; rm -rf ~" "msg"
-assert_fails_with "--resume not UUID" "invalid --resume" --dry-run --in 5s --resume "garbage" "msg"
-assert_fails_with "--resume too short" "invalid --resume" --dry-run --in 5s --resume "12345678-1234-1234-1234-12345678" "msg"
+echo "=== --claude-args (resume lives here now in v0.2) ==="
+assert_fails_with "--resume as top-level flag rejected" "unknown flag" --dry-run --in 5s --resume "7f3a4c12-0000-4000-8000-000000000000" "msg"
+assert_fails_with "--claude-args -p blocked" "headless" --dry-run --in 5s --claude-args "-p" "msg"
+assert_fails_with "--claude-args --resume garbage rejected" "--resume value must be a UUID" --dry-run --in 5s --claude-args "--resume garbage" "msg"
+assert_fails_with "--claude-args unknown flag rejected" "not in the allowlist" --dry-run --in 5s --claude-args "--not-real" "msg"
 
 echo
 echo "=== message validation ==="
