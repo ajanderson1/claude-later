@@ -70,3 +70,29 @@ cl_pf_run_all() {
   IFS=$IFS_SAVE
   return 0
 }
+
+# ---- Extracted preflight functions ------------------------------------------
+# These are sourced into the main script. Each returns 0 on pass, nonzero on
+# fail after calling `abort`. Behaviour must be byte-identical to the inline
+# versions they replace in claude-later v0.2.1.
+
+cl_pf_1_platform_terminal() {
+  [ "$(uname -s)" = "Darwin" ] || abort "macOS only (uname=$(uname -s))" 1
+  [ "${TERM_PROGRAM:-}" = "iTerm.app" ] || abort "must be run from iTerm2 (TERM_PROGRAM=${TERM_PROGRAM:-unset})" 1
+  [ -n "${ITERM_SESSION_ID:-}" ] || abort "ITERM_SESSION_ID is unset" 1
+  [ -z "${TMUX:-}" ] || abort "claude-later does not support running inside tmux — keystroke targeting cannot be guaranteed" 1
+  [ -z "${STY:-}" ] || abort "claude-later does not support running inside GNU screen" 1
+  if ! [[ "$ITERM_SESSION_ID" =~ ^w[0-9]+t[0-9]+p[0-9]+:[0-9A-Fa-f-]{36}$ ]]; then
+    abort "ITERM_SESSION_ID format unexpected: $ITERM_SESSION_ID" 1
+  fi
+  CL_PANE_ID="${ITERM_SESSION_ID%%:*}"
+  CL_ITERM_VERSION=$(osa_iterm_version) || {
+    local hint
+    hint=$(_osa_classify_error "$(osa_last_error)")
+    abort "cannot query iTerm2 via AppleScript: $hint" 1
+  }
+}
+
+if [ "${CL_PF_AUTOREGISTER:-0}" = "1" ]; then
+  cl_pf_register 1 "macOS + iTerm2 + not in tmux" cl_pf_1_platform_terminal
+fi

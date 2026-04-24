@@ -13,6 +13,8 @@ CL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$CL_DIR/lib/time.sh"
 . "$CL_DIR/lib/state.sh"
 . "$CL_DIR/lib/osa.sh"
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+unset CL_PF_AUTOREGISTER
 
 CL_VERSION="0.2.1"
 
@@ -158,25 +160,7 @@ parse_args() {
 
 # ---- Pre-flight checks ------------------------------------------------------
 
-pf_1_platform_terminal() {
-  [ "$(uname -s)" = "Darwin" ] || abort "macOS only (uname=$(uname -s))" 1
-  [ "${TERM_PROGRAM:-}" = "iTerm.app" ] || abort "must be run from iTerm2 (TERM_PROGRAM=${TERM_PROGRAM:-unset})" 1
-  [ -n "${ITERM_SESSION_ID:-}" ] || abort "ITERM_SESSION_ID is unset" 1
-  [ -z "${TMUX:-}" ] || abort "claude-later does not support running inside tmux — keystroke targeting cannot be guaranteed" 1
-  [ -z "${STY:-}" ] || abort "claude-later does not support running inside GNU screen" 1
-
-  # ITERM_SESSION_ID strict allowlist regex
-  if ! [[ "$ITERM_SESSION_ID" =~ ^w[0-9]+t[0-9]+p[0-9]+:[0-9A-Fa-f-]{36}$ ]]; then
-    abort "ITERM_SESSION_ID format unexpected: $ITERM_SESSION_ID" 1
-  fi
-
-  CL_PANE_ID="${ITERM_SESSION_ID%%:*}"
-  CL_ITERM_VERSION=$(osa_iterm_version) || {
-    local hint
-    hint=$(_osa_classify_error "$(osa_last_error)")
-    abort "cannot query iTerm2 via AppleScript: $hint" 1
-  }
-}
+pf_1_platform_terminal() { cl_pf_1_platform_terminal; }
 
 pf_2_binaries() {
   command -v claude >/dev/null || abort "claude not on PATH" 1

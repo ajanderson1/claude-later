@@ -36,4 +36,11 @@ assert_nonzero "$rc" "run_all returns nonzero when a preflight fails"
 # After the run, slot 1 is in 'passed' but slot 2 is not
 got=$(cl_pf_passed_labels); assert_eq "$got" "label A" "only slot 1 recorded as passed"
 
+# Autoregistration: sourcing with CL_PF_AUTOREGISTER=1 registers pf_1 by slot/label
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 1)
+assert_eq "$got" "macOS + iTerm2 + not in tmux" "pf_1 registered with correct label"
+unset CL_PF_AUTOREGISTER
+
 test_summary
