@@ -50,4 +50,44 @@ got=$(cl_pf_label_for 2)
 assert_eq "$got" "claude + jq + swift + caffeinate + pmset present" "pf_2 registered"
 unset CL_PF_AUTOREGISTER
 
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 3); assert_eq "$got" "--at / --in parses to a valid future time" "pf_3 registered"
+unset CL_PF_AUTOREGISTER
+
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 4); assert_eq "$got" "--claude-args validated against allowlist / blocklist" "pf_4 registered"
+unset CL_PF_AUTOREGISTER
+
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 5); assert_eq "$got" "message is single-line, printable, non-empty" "pf_5 registered"
+unset CL_PF_AUTOREGISTER
+
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 6); assert_eq "$got" "iTerm2 scripting reachable; Secure Input not engaged" "pf_6 registered"
+unset CL_PF_AUTOREGISTER
+
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 8); assert_eq "$got" "on AC power (or --allow-battery set)" "pf_8 registered"
+unset CL_PF_AUTOREGISTER
+
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 9); assert_eq "$got" "no other claude-later armed in this pane" "pf_9 registered"
+unset CL_PF_AUTOREGISTER
+
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 10); assert_eq "$got" "log file writable" "pf_10 registered"
+unset CL_PF_AUTOREGISTER
+
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 12); assert_eq "$got" "claude first-run hygiene; no MCP auth pending" "pf_12 registered"
+unset CL_PF_AUTOREGISTER
+
 test_summary
