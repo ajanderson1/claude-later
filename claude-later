@@ -15,6 +15,7 @@ CL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$CL_DIR/lib/osa.sh"
 CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
 unset CL_PF_AUTOREGISTER
+. "$CL_DIR/lib/banner.sh"
 
 CL_VERSION="0.2.1"
 
@@ -281,43 +282,7 @@ pf_12_first_run_hygiene() { cl_pf_12_first_run_hygiene; }
 
 # ---- ARMED banner -----------------------------------------------------------
 
-print_armed_banner() {
-  local now
-  now=$(date +%s)
-  local delta=$((CL_TARGET_EPOCH - now))
-  printf '\n'
-  printf '\033[32m✓ claude-later ARMED\033[0m\n'
-  printf '  Fire time : %s\n' "$(wall_clock_for_epoch "$CL_TARGET_EPOCH")"
-  printf '              %s from now\n' "$(delta_human "$delta")"
-  printf '  Pane      : %s (UUID %s)\n' "$CL_PANE_ID" "${ITERM_SESSION_ID#*:}"
-  printf '  iTerm2    : %s\n' "$CL_ITERM_VERSION"
-  printf '  claude    : %s\n' "$CL_CLAUDE_VERSION"
-  if [ ${#CL_CLAUDE_ARGS_ARR[@]} -gt 0 ]; then
-    printf '  Invocation: claude'
-    local arg
-    for arg in "${CL_CLAUDE_ARGS_ARR[@]}"; do
-      printf ' %q' "$arg"
-    done
-    printf '\n'
-    if [ -n "$CL_RESUME_NAME_RESOLUTION" ]; then
-      printf '              (resolved --resume-name %s)\n' "$CL_RESUME_NAME_RESOLUTION"
-    fi
-  else
-    printf '  Invocation: claude (no passthrough args)\n'
-  fi
-  printf '  Message   : %q (%d chars)\n' "$ARG_MESSAGE" "${#ARG_MESSAGE}"
-  printf '  PID       : %d\n' "$$"
-  printf '  Log       : %s\n' "$CL_LOG_PATH"
-  printf '  State     : %s\n' "$CL_STATE_PATH"
-  if [ "$ARG_NO_CAFFEINATE" -eq 0 ]; then
-    printf '  Caffeinate: active\n'
-  else
-    printf '  Caffeinate: DISABLED (--no-caffeinate)\n'
-  fi
-  printf '\n'
-  printf '  \033[33mDO NOT close this iTerm2 window. Closing it cancels the job.\033[0m\n'
-  printf '\n'
-}
+print_armed_banner() { cl_banner_render; }
 
 # ---- Signal traps -----------------------------------------------------------
 
@@ -360,15 +325,15 @@ install_post_traps() {
 # ---- Main pre-flight runner -------------------------------------------------
 
 run_preflight() {
-  pf_1_platform_terminal
-  pf_2_binaries
-  pf_3_time_parsing
-  pf_4_claude_args
-  pf_5_message_content
-  pf_12_first_run_hygiene
-  pf_8_power_sleep
-  pf_9_state_file
-  pf_10_logs
+  pf_1_platform_terminal;  cl_pf_record_passed 1
+  pf_2_binaries;           cl_pf_record_passed 2
+  pf_3_time_parsing;       cl_pf_record_passed 3
+  pf_4_claude_args;        cl_pf_record_passed 4
+  pf_5_message_content;    cl_pf_record_passed 5
+  pf_12_first_run_hygiene; cl_pf_record_passed 12
+  pf_8_power_sleep;        cl_pf_record_passed 8
+  pf_9_state_file;         cl_pf_record_passed 9
+  pf_10_logs;              cl_pf_record_passed 10
 
   # Build a JSON array of the validated claude-args tokens for the state
   # file. Pass through jq -R -s -c 'split("\u0000")[:-1]' with NUL separator
@@ -396,7 +361,7 @@ run_preflight() {
     "$CL_LOG_PATH" || abort "cannot write state file" 1
   state_active_set "$CL_ACTIVE_PTR" "$CL_STATE_PATH"
 
-  pf_6_silent_probe_secure_input
+  pf_6_silent_probe_secure_input; cl_pf_record_passed 6
   pf_7_visible_probe
 }
 

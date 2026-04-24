@@ -440,3 +440,12 @@ cl_pf_12_first_run_hygiene() {
 if [ "${CL_PF_AUTOREGISTER:-0}" = "1" ]; then
   cl_pf_register 12 "claude first-run hygiene; no MCP auth pending" cl_pf_12_first_run_hygiene
 fi
+
+cl_pf_record_passed() {
+  local slot=$1
+  local label
+  label=$(cl_pf_label_for "$slot")
+  [ -n "$label" ] || return 0
+  CL_PF_PASSED="${CL_PF_PASSED}${slot}|${label}
+"
+}
