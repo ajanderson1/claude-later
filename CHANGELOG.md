@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Testing
+
+- Spike: `osa_write_text ... newline YES` into a backgrounded `read -r` in the
+  same pane does NOT deliver, because Claude Code's TUI owns the pty and
+  intercepts the keystrokes. That regime is not what the v0.3 e2e test
+  exercises — the e2e `exec`s fake-claude, so fake-claude owns the pty
+  exclusively. The e2e test itself is the definitive answer; if it fails we
+  wrap with `rlwrap`. For now, e2e uses fake-claude's existing `read -r`.
+
 ## [0.2.1] — 2026-04-08
 
 ### Added
