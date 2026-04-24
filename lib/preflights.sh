@@ -96,3 +96,18 @@ cl_pf_1_platform_terminal() {
 if [ "${CL_PF_AUTOREGISTER:-0}" = "1" ]; then
   cl_pf_register 1 "macOS + iTerm2 + not in tmux" cl_pf_1_platform_terminal
 fi
+
+cl_pf_2_binaries() {
+  command -v claude >/dev/null || abort "claude not on PATH" 1
+  CL_CLAUDE_PATH=$(command -v claude)
+  CL_CLAUDE_VERSION=$(claude --version 2>/dev/null) || abort "claude --version failed" 1
+  command -v osascript >/dev/null || abort "osascript missing" 1
+  command -v caffeinate >/dev/null || abort "caffeinate missing" 1
+  command -v jq >/dev/null || abort "jq missing — install with: brew install jq" 1
+  command -v swift >/dev/null || abort "swift missing — install Xcode CLI tools: xcode-select --install" 1
+  command -v pmset >/dev/null || abort "pmset missing" 1
+}
+
+if [ "${CL_PF_AUTOREGISTER:-0}" = "1" ]; then
+  cl_pf_register 2 "claude + jq + swift + caffeinate + pmset present" cl_pf_2_binaries
+fi

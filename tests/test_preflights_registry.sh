@@ -43,4 +43,11 @@ got=$(cl_pf_label_for 1)
 assert_eq "$got" "macOS + iTerm2 + not in tmux" "pf_1 registered with correct label"
 unset CL_PF_AUTOREGISTER
 
+# Autoregistration: sourcing with CL_PF_AUTOREGISTER=1 registers pf_2 by slot/label
+cl_pf_registry_reset
+CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
+got=$(cl_pf_label_for 2)
+assert_eq "$got" "claude + jq + swift + caffeinate + pmset present" "pf_2 registered"
+unset CL_PF_AUTOREGISTER
+
 test_summary
