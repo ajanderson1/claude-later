@@ -138,6 +138,10 @@ state_set_int() {
   mv "$tmp" "$path" || { rm -f "$tmp"; return 1; }
 }
 
+# Known status values (as of v0.3.0): armed, delivered, tui_not_ready,
+# session_died, session_died_pre_exec, secure_input_engaged, unexpected_modal,
+# write_failed, helper_timeout, missed_window, cancelled_by_window_close,
+# cancelled_by_user, killed, iterm_version_changed, claude_version_changed.
 # state_mark "$path" "$status" ["$detail"]
 # Update status, status_detail, status_at_epoch atomically.
 state_mark() {

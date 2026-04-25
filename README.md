@@ -300,6 +300,7 @@ Every failure writes a structured status into the state file and fires a macOS n
 - `helper_timeout` — hard cap (5 minutes) exceeded before delivery
 - `missed_window` — fire time passed while the script was sleeping
 - `cancelled_by_window_close` — iTerm2 window closed between arm and helper spawn
+- `cancelled_by_user` — user pressed ^C during the live countdown before fire time
 
 ### Failure modes the snippet does **not** defend against
 
