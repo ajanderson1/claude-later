@@ -7,14 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Testing
+## [0.3.0] — 2026-04-25
 
-- Spike: `osa_write_text ... newline YES` into a backgrounded `read -r` in the
-  same pane does NOT deliver, because Claude Code's TUI owns the pty and
-  intercepts the keystrokes. That regime is not what the v0.3 e2e test
-  exercises — the e2e `exec`s fake-claude, so fake-claude owns the pty
-  exclusively. The e2e test itself is the definitive answer; if it fails we
-  wrap with `rlwrap`. For now, e2e uses fake-claude's existing `read -r`.
+### Added
+
+- **`--interactive` / `-i` scheduling wizard** that walks through time, resume,
+  claude-args, and message with live validation, then hands off to the normal
+  arm flow. Shows the equivalent non-interactive command at the confirmation
+  step as a teaching surface. Type `!abort` at any prompt to exit cleanly.
+- **Live in-pane countdown** replaces the silent sleep between arm and fire.
+  `^C` cancels with a `cancelled_by_user` tombstone; `^D` re-prints the ARMED
+  banner.
+- **Enriched ARMED banner** enumerates every preflight that was verified at
+  arm time and lists the residual risks (window close, reboot, lid close)
+  that cannot be defended against.
+- **End-to-end test** (`tests/integration/test_e2e_fake_claude.sh`) exercises
+  the full arm→fire→deliver cycle against the `fake-claude` fixture. Auto-
+  skips inside a running Claude Code session — must be run from a bare iTerm2
+  shell. See `tests/README.md` for the manual run procedure.
+- New tombstone class: `cancelled_by_user`.
+
+### Changed
+
+- Preflights extracted to `lib/preflights.sh` behind a registry API. Behavior
+  preserved byte-for-byte; the banner uses the registry to render the
+  "Verified now" list.
+
+### Unchanged
+
+- All existing flags. No breaking changes.
 
 ## [0.2.1] — 2026-04-08
 

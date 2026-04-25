@@ -18,7 +18,7 @@ unset CL_PF_AUTOREGISTER
 . "$CL_DIR/lib/banner.sh"
 . "$CL_DIR/lib/countdown.sh"
 
-CL_VERSION="0.2.1"
+CL_VERSION="0.3.0"
 
 # Parsed args
 ARG_AT=""
