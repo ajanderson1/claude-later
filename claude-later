@@ -16,6 +16,7 @@ CL_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CL_PF_AUTOREGISTER=1 . "$CL_DIR/lib/preflights.sh"
 unset CL_PF_AUTOREGISTER
 . "$CL_DIR/lib/banner.sh"
+. "$CL_DIR/lib/countdown.sh"
 
 CL_VERSION="0.2.1"
 
@@ -369,26 +370,8 @@ run_preflight() {
 
 sleep_until_fire() {
   install_pre_traps
-  log_event "sleep loop start target=$CL_TARGET_EPOCH"
-  while :; do
-    local now
-    now=$(date +%s)
-    local remaining=$((CL_TARGET_EPOCH - now))
-    if [ "$remaining" -le 5 ]; then
-      log_event "sleep loop reached T-5s window"
-      break
-    fi
-    if polling_missed_window "$now" "$CL_TARGET_EPOCH" 60; then
-      log_event "missed window pre-helper-spawn"
-      state_mark "$CL_STATE_PATH" "missed_window" "asleep through fire window"
-      state_active_clear "$CL_ACTIVE_PTR"
-      notify "claude-later: missed_window" "System was asleep through the fire window"
-      exit 1
-    fi
-    local nap=$((remaining - 5))
-    if [ "$nap" -gt 30 ]; then nap=30; fi
-    sleep "$nap"
-  done
+  log_event "countdown loop start target=$CL_TARGET_EPOCH"
+  cl_countdown_loop
 }
 
 spawn_helper_and_exec() {
