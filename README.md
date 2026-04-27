@@ -20,7 +20,6 @@
 [![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility)
-[![Terminal: iTerm2](https://img.shields.io/badge/terminal-iTerm2-8A2BE2.svg)](https://iterm2.com)
 [![Shell: bash 3.2+](https://img.shields.io/badge/shell-bash%203.2%2B-yellow.svg)](#compatibility)
 [![Status: beta](https://img.shields.io/badge/status-beta-orange.svg)](#status)
 
@@ -30,7 +29,9 @@ You type a command. The script arms itself, holds the pane, and then fires at th
 
 Not `claude -p`. Not headless. Not a sidebar. **A real TUI session you can watch happen and take over with your keyboard.**
 
-![claude-later interactive wizard demo](assets/demo.gif)
+![claude-later end-to-end fire](assets/demo.gif)
+
+*Arm with `--interactive`, watch the ARMED banner and pre-flight summary, then `claude` boots at T-0 and the prompt is typed into the live TUI.*
 
 ---
 
@@ -106,12 +107,22 @@ For broader compatibility plans, see [ROADMAP.md](ROADMAP.md).
 ```sh
 git clone https://github.com/ajanderson1/claude-later.git ~/GitHub/claude-later
 ln -s ~/GitHub/claude-later/claude-later /usr/local/bin/claude-later
-claude-later --version  # should print: claude-later 0.3.0
+claude-later --version  # should print: claude-later 0.3.1
 ```
 
 First time you run `claude-later`, macOS will prompt for permission for your shell's parent process (iTerm2 or the process invoking it) to control iTerm2 via AppleScript. Grant it — this is System Settings → Privacy & Security → Automation.
 
 Also run `claude` once in whatever directory you plan to use `claude-later` from, to clear any first-run trust prompts. Pre-flight refuses to arm if `~/.claude/projects/-<slug>/` doesn't exist for the current directory.
+
+## Quickstart
+
+Open an iTerm2 pane in a directory where you've run `claude` before, and arm a fire 10 seconds out:
+
+```sh
+claude-later --in 10s "say hello in 3 words"
+```
+
+You'll see the ARMED banner, a live countdown, and at T-0 `claude` boots in the same pane and types the prompt. Press `Ctrl+C` during the countdown to cancel.
 
 ## Usage
 
@@ -349,7 +360,7 @@ See [tests/README.md](tests/README.md) for what each suite covers.
 
 ## Status
 
-**0.3.0 — Beta.** The core fire-and-deliver path is validated end-to-end in live testing. The CLI surface is usable but may change before 1.0. Tombstone names are stable; flag semantics are stable; the state file schema is versioned (`schema_version: 1`) and will migrate cleanly if it changes.
+**0.3.1 — Beta.** The core fire-and-deliver path is validated end-to-end in live testing. The CLI surface is usable but may change before 1.0. Tombstone names are stable; flag semantics are stable; the state file schema is versioned (`schema_version: 1`) and will migrate cleanly if it changes.
 
 See [SPIKES.md](SPIKES.md) for the empirical work that justified the load-bearing architectural decisions.
 See [ROADMAP.md](ROADMAP.md) for broader distribution plans.
