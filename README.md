@@ -3,8 +3,6 @@
   <img alt="claude-later — schedule a real, interactive Claude Code TUI session to fire at a future time, in the iTerm2 pane you were already using." src="assets/hero-light.svg">
 </picture>
 
-# claude-later
-
 [![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility)
