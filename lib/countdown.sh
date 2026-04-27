@@ -62,9 +62,15 @@ cl_countdown_loop() {
     # \r returns cursor to col 0; \033[K clears to EOL. Stderr keeps stdout clean for tests.
     printf '\r\033[K%s' "$line" >&2
     # Sleep 1s but wake on ^D (EOF on stdin). When stdin is not a tty (tests,
-    # CI), `read -t` returns immediately; fall back to plain sleep.
+    # CI), `read -t` returns rc=1 immediately on EOF; fall back to plain sleep.
+    # Bash `read -t`: rc=0 line received, rc=1 EOF, rc>128 timeout. We treat
+    # EOF as the re-banner signal, ignore lines (don't consume meaningful UX),
+    # and let timeout drive the 1s tick.
     if [ -t 0 ]; then
-      if IFS= read -r -t 1 _junk; then
+      local rc
+      IFS= read -r -t 1 _junk
+      rc=$?
+      if [ "$rc" -eq 1 ]; then
         printf '\n' >&2
         cl_banner_render >&2
       fi

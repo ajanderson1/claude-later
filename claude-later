@@ -72,6 +72,9 @@ REQUIRED (exactly one)
   --in DURATION   Relative time. Accepts: 30s, 5m, 4h, 2h30m, 1d12h, etc.
 
 OPTIONS
+  --interactive, -i     Walk through scheduling with a guided wizard. Asks
+                        when, resume, extra flags, message, then shows the
+                        equivalent non-interactive command before arming.
   --claude-args "..."   Transparent passthrough of arguments to the claude
                         binary at fire time. Whitespace-separated; no quoting
                         inside. Validated against an allowlist at arm time.
