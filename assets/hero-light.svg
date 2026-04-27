@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 360" role="img" aria-label="claude-later — Schedule a real, interactive Claude Code TUI session to fire at a future time, in the iTerm2 pane you were already using.">
+  <style>
+    .bg { fill: #f4f3ef; }
+    .name { font-family: 'Inter Tight', system-ui, -apple-system, 'Segoe UI', sans-serif; font-weight: 800; font-size: 96px; letter-spacing: -4.32px; fill: #15151a; }
+    .later { fill: #d24c2a; }
+    .tag { font-family: 'Inter Tight', system-ui, -apple-system, 'Segoe UI', sans-serif; font-weight: 400; font-size: 17px; letter-spacing: -0.085px; fill: #5e5e66; }
+    .digit { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 92px; letter-spacing: -2.76px; font-feature-settings: "tnum" 1; fill: #15151a; }
+    .digit-lit { fill: #d24c2a; }
+    .sep { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 92px; fill: #d6d4cc; }
+    .lbl { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; font-weight: 500; font-size: 10px; letter-spacing: 3.2px; fill: #8a8a92; }
+  </style>
+  <rect class="bg" width="1600" height="360"/>
+  <!-- Left column: wordmark + tagline. Padding 56 72; baseline placement chosen to mirror the HTML's flex centering. -->
+  <text class="name" x="72" y="155">claude</text>
+  <text class="name later" x="72" y="243">— later</text>
+  <text class="tag" x="72" y="285">Schedule a real, interactive Claude Code TUI session to fire at a future</text>
+  <text class="tag" x="72" y="307">time, in the iTerm2 pane you were already using.</text>
+  <!-- Right column: clock 03:42:18, minutes lit. Group vertically centered (digit baseline 211, label 237). -->
+  <text class="digit" x="897" y="211">03</text>
+  <text class="lbl" x="938" y="237" text-anchor="middle">HOURS</text>
+  <text class="sep" x="1029" y="211">:</text>
+  <text class="digit digit-lit" x="1066" y="211">42</text>
+  <text class="lbl" x="1107" y="237" text-anchor="middle">MINUTES</text>
+  <text class="sep" x="1198" y="211">:</text>
+  <text class="digit" x="1235" y="211">18</text>
+  <text class="lbl" x="1276" y="237" text-anchor="middle">SECONDS</text>
+</svg>
