@@ -16,7 +16,7 @@ cl_format_countdown() {
     h=$((s / 3600)); m=$(((s % 3600) / 60)); sec=$((s % 60))
     body="${h}h ${m}m ${sec}s"
   fi
-  printf '⏳ claude-later • fires in %s • ^C to cancel • ^D to re-banner' "$body"
+  printf '⏳ claude-later • fires in %s • ^C to cancel' "$body"
 }
 
 # cl_countdown_cancel_tombstone STATE_PATH
@@ -61,21 +61,6 @@ cl_countdown_loop() {
     line=$(cl_format_countdown "$remaining")
     # \r returns cursor to col 0; \033[K clears to EOL. Stderr keeps stdout clean for tests.
     printf '\r\033[K%s' "$line" >&2
-    # Sleep 1s but wake on ^D (EOF on stdin). When stdin is not a tty (tests,
-    # CI), `read -t` returns rc=1 immediately on EOF; fall back to plain sleep.
-    # Bash `read -t`: rc=0 line received, rc=1 EOF, rc>128 timeout. We treat
-    # EOF as the re-banner signal, ignore lines (don't consume meaningful UX),
-    # and let timeout drive the 1s tick.
-    if [ -t 0 ]; then
-      local rc
-      IFS= read -r -t 1 _junk
-      rc=$?
-      if [ "$rc" -eq 1 ]; then
-        printf '\n' >&2
-        cl_banner_render >&2
-      fi
-    else
-      sleep 1
-    fi
+    sleep 1
   done
 }

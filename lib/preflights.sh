@@ -78,10 +78,12 @@ cl_pf_run_all() {
 
 cl_pf_1_platform_terminal() {
   [ "$(uname -s)" = "Darwin" ] || abort "macOS only (uname=$(uname -s))" 1
-  [ "${TERM_PROGRAM:-}" = "iTerm.app" ] || abort "must be run from iTerm2 (TERM_PROGRAM=${TERM_PROGRAM:-unset})" 1
-  [ -n "${ITERM_SESSION_ID:-}" ] || abort "ITERM_SESSION_ID is unset" 1
-  [ -z "${TMUX:-}" ] || abort "claude-later does not support running inside tmux — keystroke targeting cannot be guaranteed" 1
-  [ -z "${STY:-}" ] || abort "claude-later does not support running inside GNU screen" 1
+  if [ "${TERM_PROGRAM:-}" != "iTerm.app" ]; then
+    abort "must be run from iTerm2 (got TERM_PROGRAM=${TERM_PROGRAM:-unset}). Open iTerm2 and run it from a normal pane — not tmux, screen, VS Code's terminal, or Apple Terminal." 1
+  fi
+  [ -n "${ITERM_SESSION_ID:-}" ] || abort "ITERM_SESSION_ID is unset — open a fresh iTerm2 tab and try again (something stripped iTerm's session id from the environment)" 1
+  [ -z "${TMUX:-}" ] || abort "claude-later does not support running inside tmux — detach (Ctrl-b d) and run from a plain iTerm2 pane. Keystrokes are injected via iTerm's AppleScript API, which targets the iTerm pane, not the tmux pane." 1
+  [ -z "${STY:-}" ] || abort "claude-later does not support running inside GNU screen — detach and run from a plain iTerm2 pane." 1
   if ! [[ "$ITERM_SESSION_ID" =~ ^w[0-9]+t[0-9]+p[0-9]+:[0-9A-Fa-f-]{36}$ ]]; then
     abort "ITERM_SESSION_ID format unexpected: $ITERM_SESSION_ID" 1
   fi

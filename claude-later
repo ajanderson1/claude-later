@@ -18,7 +18,7 @@ unset CL_PF_AUTOREGISTER
 . "$CL_DIR/lib/banner.sh"
 . "$CL_DIR/lib/countdown.sh"
 
-CL_VERSION="0.3.0"
+CL_VERSION="0.3.1"
 
 # Parsed args
 ARG_AT=""
@@ -466,6 +466,19 @@ main() {
   if [ "$ARG_INTERACTIVE" -eq 1 ]; then
     . "$CL_DIR/lib/interactive.sh"
     cl_wizard_run
+    # The wizard populated ARG_AT/ARG_IN, ARG_CLAUDE_ARGS, ARG_MESSAGE.
+    # Replace argv with the equivalent non-interactive form so the upcoming
+    # caffeinate re-exec doesn't relaunch the wizard.
+    set --
+    [ -n "$ARG_AT" ] && set -- "$@" --at "$ARG_AT"
+    [ -n "$ARG_IN" ] && set -- "$@" --in "$ARG_IN"
+    [ -n "$ARG_CLAUDE_ARGS" ] && set -- "$@" --claude-args "$ARG_CLAUDE_ARGS"
+    [ "$ARG_DRY_RUN" -eq 1 ] && set -- "$@" --dry-run
+    [ "$ARG_NO_CAFFEINATE" -eq 1 ] && set -- "$@" --no-caffeinate
+    [ "$ARG_ALLOW_BATTERY" -eq 1 ] && set -- "$@" --allow-battery
+    [ "$ARG_LOG_SNAPSHOTS" -eq 1 ] && set -- "$@" --log-snapshots
+    [ "$ARG_SKIP_MCP_CHECK" -eq 1 ] && set -- "$@" --skip-mcp-check
+    set -- "$@" "$ARG_MESSAGE"
   fi
   # Re-exec under caffeinate BEFORE pre-flights so state/.active is written
   # exactly once (otherwise pf_9 sees its own prior-pass state as "live").

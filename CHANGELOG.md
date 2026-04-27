@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-27
+
+### Fixed
+
+- **Countdown flicker**: the live countdown was repainting the entire ARMED
+  banner once per second on real ttys. Cause: `read -t 1` on macOS bash 3.2
+  returns rc=1 on timeout (not rc>128 as the man page implies), so the
+  EOF-detection branch (intended for `^D`) was firing every tick. Removed
+  the `^D` re-banner feature; countdown now updates the line in-place via
+  `\r\033[K` only.
+- **Wizard re-exec loop**: `claude-later --interactive` would re-launch the
+  wizard each time caffeinate re-exec'd the script. Main now rebuilds argv
+  from the resolved `ARG_*` values so the re-exec runs as the equivalent
+  non-interactive invocation.
+- **Wizard resume-by-name with spaces**: picking a `/rename`'d session whose
+  name contained whitespace produced `--resume-name "name with spaces"`,
+  which is unparseable through `--claude-args` (whitespace-tokenised). The
+  wizard now emits `--resume <uuid>` directly when the user picks from the
+  list — the UUID is always safe.
+
+### Changed
+
+- **Preflight error messages** (`pf_1_platform_terminal`) now include
+  actionable hints — what to do, not just what's wrong. Examples: nested
+  tmux explains how to detach; missing `ITERM_SESSION_ID` suggests opening
+  a fresh tab.
+- **Wizard Q2 (resume) prompt**: the three-option `[f]resh / [u]uid /
+  [n]ame:` was replaced with a yes/no prompt (`(y/N):`) that, on yes, shows
+  the named-session list inline and accepts a number, an exact name, or a
+  pasted UUID — collapsing two choices into one input.
+
 ## [0.3.0] — 2026-04-25
 
 ### Added
