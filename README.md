@@ -17,7 +17,7 @@
 
 # claude-later
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
+[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility)
 [![Terminal: iTerm2](https://img.shields.io/badge/terminal-iTerm2-8A2BE2.svg)](https://iterm2.com)
@@ -29,6 +29,8 @@
 You type a command. The script arms itself, holds the pane, and then fires at the appointed time — booting `claude` in the pane you've been watching, typing your prompt into the input box, and pressing Enter as if a human had been sitting at the keyboard.
 
 Not `claude -p`. Not headless. Not a sidebar. **A real TUI session you can watch happen and take over with your keyboard.**
+
+![claude-later interactive wizard demo](assets/demo.gif)
 
 ---
 
