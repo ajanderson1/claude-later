@@ -52,9 +52,14 @@ bash tests/integration/run-integration.sh
 
 ## What we don't YET test (but should)
 
-- **Full end-to-end fire-and-deliver** against `fake-claude`. The blocker is that `fake-claude`'s `read -r` reads from bash's line buffer, and we haven't empirically confirmed that `osa_write_text` with `newline YES` delivers bytes into bash's line discipline (we only confirmed it for Claude Code's readline-based TUI). A spike is needed first. Tracked in [ROADMAP.md](../ROADMAP.md).
 - **Secure Input engaged at T-0**. Would need to script 1Password or the lock screen. Flaky.
 - **`write_failed` tombstone class**. Hard to trigger without revoking Automation permission mid-test, which is a privilege issue.
+
+## Running the e2e test (`test_e2e_fake_claude.sh`)
+
+`tests/integration/test_e2e_fake_claude.sh` exercises the full arm→fire→deliver cycle against the `fake-claude` fixture. **It must be run from a bare iTerm2 shell, not from inside a running Claude Code session** — auto-skips in the latter case via `$CLAUDECODE` / `$CLAUDE_CODE_ENTRYPOINT` detection. The reason: when the test runs inside an agent session, the agent's TUI already owns the pane's pty; `claude-later`'s backgrounded `exec fake-claude` then inherits the agent subshell's pipe rather than the pane, so fake-claude's stdout never reaches the pane and the helper's readiness probe never finds the `❯` glyph.
+
+To run manually: open a fresh iTerm2 tab, `cd` to the repo, then `bash tests/integration/test_e2e_fake_claude.sh`. It takes ~10 seconds.
 
 ## Writing new tests
 

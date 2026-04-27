@@ -17,7 +17,7 @@
 
 # claude-later
 
-[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/ajanderson1/claude-later/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#compatibility)
 [![Terminal: iTerm2](https://img.shields.io/badge/terminal-iTerm2-8A2BE2.svg)](https://iterm2.com)
@@ -104,7 +104,7 @@ For broader compatibility plans, see [ROADMAP.md](ROADMAP.md).
 ```sh
 git clone https://github.com/ajanderson1/claude-later.git ~/GitHub/claude-later
 ln -s ~/GitHub/claude-later/claude-later /usr/local/bin/claude-later
-claude-later --version  # should print: claude-later 0.2.1
+claude-later --version  # should print: claude-later 0.3.0
 ```
 
 First time you run `claude-later`, macOS will prompt for permission for your shell's parent process (iTerm2 or the process invoking it) to control iTerm2 via AppleScript. Grant it — this is System Settings → Privacy & Security → Automation.
@@ -246,6 +246,24 @@ claude-later --at 14:05 --claude-args "--resume 7f3a4c12-0000-4000-8000-00000000
 
 At 14:05 the script fires a fresh `claude --resume <uuid>` in your pane and types the prompt. Because it's a new process, the rate-limit counter is already reset at the provider level — no state-resurrection shenanigans. The resume UUID is validated against the UUID regex at arm time and the transcript file is checked for existence, so typos are caught loudly before you walk away.
 
+### Interactive mode
+
+If you forget the flag syntax, run the wizard:
+
+```sh
+claude-later --interactive    # or -i
+```
+
+It asks four questions (when, resume?, extra flags, message), validates each as you type, and shows the equivalent non-interactive command before arming:
+
+```
+This is equivalent to running:
+  claude-later --in 4h --claude-args "--resume-name nightly" "review the PRs"
+Proceed? [Y/n]
+```
+
+Type `!abort` at any prompt to exit cleanly.
+
 ## Options
 
 | Flag                    | Description                                                                                            |
@@ -254,6 +272,7 @@ At 14:05 the script fires a fresh `claude --resume <uuid>` in your pane and type
 | `--in DURATION`         | Relative: `30s`, `5m`, `4h`, `2h30m`, `1d12h`, etc.                                                    |
 | `--claude-args "..."`   | Whitespace-separated passthrough of flags to `claude` at fire time. See the dedicated section above.   |
 | `--dry-run`             | Run pre-flights + ARMED banner, then exit without scheduling.                                          |
+| `--interactive`, `-i`   | Walk through scheduling with a guided wizard.                                                          |
 | `--no-caffeinate`       | Skip the auto-re-exec under `caffeinate -dimsu`. Use only if you know the Mac will stay awake.         |
 | `--allow-battery`       | Allow arming on battery power. Script warns but proceeds.                                              |
 | `--log-pane-snapshots`  | Capture full pane contents into the log on each helper poll. Debugging use.                            |
@@ -300,6 +319,7 @@ Every failure writes a structured status into the state file and fires a macOS n
 - `helper_timeout` — hard cap (5 minutes) exceeded before delivery
 - `missed_window` — fire time passed while the script was sleeping
 - `cancelled_by_window_close` — iTerm2 window closed between arm and helper spawn
+- `cancelled_by_user` — user pressed ^C during the live countdown before fire time
 
 ### Failure modes the snippet does **not** defend against
 
@@ -327,7 +347,7 @@ See [tests/README.md](tests/README.md) for what each suite covers.
 
 ## Status
 
-**0.1.0 — Beta.** The core fire-and-deliver path is validated end-to-end in live testing. The CLI surface is usable but may change before 1.0. Tombstone names are stable; flag semantics are stable; the state file schema is versioned (`schema_version: 1`) and will migrate cleanly if it changes.
+**0.3.0 — Beta.** The core fire-and-deliver path is validated end-to-end in live testing. The CLI surface is usable but may change before 1.0. Tombstone names are stable; flag semantics are stable; the state file schema is versioned (`schema_version: 1`) and will migrate cleanly if it changes.
 
 See [SPIKES.md](SPIKES.md) for the empirical work that justified the load-bearing architectural decisions.
 See [ROADMAP.md](ROADMAP.md) for broader distribution plans.
